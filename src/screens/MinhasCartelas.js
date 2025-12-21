@@ -1,14 +1,7 @@
 import { View, Text, FlatList } from 'react-native';
 import { useContext, useEffect, useState } from 'react';
 import { AuthContext } from '../contexts/AuthContext';
-import { db } from '../services/firebase';
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
-  orderBy,
-} from 'firebase/firestore';
+import { escutarCartelas } from '../services/cartelaService'; // use a função que criamos
 
 export default function MinhasCartelas() {
   const { user } = useContext(AuthContext);
@@ -17,18 +10,8 @@ export default function MinhasCartelas() {
   useEffect(() => {
     if (!user) return;
 
-    const q = query(
-      collection(db, 'Cartelas'),
-      where('userId', '==', user.uid),
-      orderBy('vendidaEm', 'desc')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const lista = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-
+    // Usa a função escutarCartelas, que já lida com vendidaEm
+    const unsubscribe = escutarCartelas(user.uid, (lista) => {
       setCartelas(lista);
     });
 
@@ -79,13 +62,18 @@ export default function MinhasCartelas() {
             </Text>
 
             <Text style={{ marginBottom: 5 }}>
-              🔢 Números:{' '}
-              {item.numeros?.join(' - ')}
+              🔢 Números: {item.numeros?.join(' - ')}
             </Text>
 
             <Text style={{ marginBottom: 5 }}>
               💰 Valor: R$ {item.valor?.toFixed(2) || '2.00'}
             </Text>
+
+            {item.userNome && (
+              <Text style={{ marginBottom: 5 }}>
+                👤 Comprador: {item.userNome}
+              </Text>
+            )}
 
             <Text
               style={{

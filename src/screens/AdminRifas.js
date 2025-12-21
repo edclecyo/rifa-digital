@@ -66,11 +66,11 @@ export default function AdminRifas() {
             <Text
               style={{
                 fontWeight: 'bold',
-                color: item.vendida ? '#16a34a' : '#dc2626',
+                color: item.vendidaEm ? '#16a34a' : '#dc2626',
                 marginBottom: 4,
               }}
             >
-              {item.vendida ? '✅ Vendida' : '🟡 Disponível'}
+              {item.vendidaEm ? '✅ Vendida' : '🟡 Disponível'}
             </Text>
 
             {item.vendida && (
