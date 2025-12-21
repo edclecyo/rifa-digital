@@ -3,9 +3,10 @@ import HomeAdmin from '../screens/HomeAdmin';
 import AdminRifas from '../screens/AdminRifas';
 import AdminUsuarios from '../screens/AdminUsuarios';
 import CriarCartela from '../screens/CriarCartela';
-
+import AdminDashboard from '../screens/AdminDashboard';
 const Stack = createNativeStackNavigator();
-
+import AdminPagamentos from '../screens/AdminPagamentos';
+import RankingCompradores from '../screens/RankingCompradores';
 export default function AdminRoutes() {
   return (
     <Stack.Navigator>
@@ -13,6 +14,9 @@ export default function AdminRoutes() {
       <Stack.Screen name="AdminRifas" component={AdminRifas} />
       <Stack.Screen name="AdminUsuarios" component={AdminUsuarios} />
       <Stack.Screen name="CriarCartela" component={CriarCartela} />
-    </Stack.Navigator>
+<Stack.Screen name="AdminDashboard" component={AdminDashboard}  options={{ title: 'Dashboard' }} />  
+<Stack.Screen name="AdminPagamentos" component={AdminPagamentos}  options={{ title: 'Pagamentos' }} /> 
+<Stack.Screen name="RankingCompradores" component={RankingCompradores} options={{ title: 'Ranking de Compradores' }} />  
+  </Stack.Navigator>
   );
 }

@@ -3,7 +3,7 @@ import { useContext } from 'react';
 import { AuthContext } from '../contexts/AuthContext';
 
 export default function HomeUser({ navigation }) {
-  const { user, profile, logout } = useContext(AuthContext);
+  const { user, profile } = useContext(AuthContext);
 
   return (
     <View
@@ -16,11 +16,16 @@ export default function HomeUser({ navigation }) {
     >
       {/* Header */}
       <View style={{ marginTop: 40 }}>
+        <Pressable onPress={() => navigation.openDrawer()}>
+          <Text style={{ color: '#fff', fontSize: 26 }}>☰</Text>
+        </Pressable>
+
         <Text
           style={{
             fontSize: 28,
             fontWeight: 'bold',
             color: '#fff',
+            marginTop: 10,
           }}
         >
           🎟️ Rifa Digital
@@ -33,7 +38,7 @@ export default function HomeUser({ navigation }) {
             color: '#cbd5f5',
           }}
         >
-          Olá, {profile?.nome || user?.nome}
+          Olá, {profile?.nome || user?.displayName || 'Usuário'}
         </Text>
       </View>
 
@@ -46,7 +51,6 @@ export default function HomeUser({ navigation }) {
             padding: 22,
             borderRadius: 16,
             marginBottom: 20,
-            elevation: 4,
           }}
         >
           <Text
@@ -54,21 +58,28 @@ export default function HomeUser({ navigation }) {
               color: '#fff',
               fontSize: 18,
               fontWeight: 'bold',
-              marginBottom: 4,
             }}
           >
             Comprar Cartelas
           </Text>
 
-          <Text
-            style={{
-              color: '#e0e7ff',
-              fontSize: 14,
-            }}
-          >
-            Escolha suas combinações de 6 números
+          <Text style={{ color: '#e0e7ff', marginTop: 4 }}>
+            Escolha seus números
           </Text>
         </Pressable>
+<Pressable
+  onPress={() => navigation.navigate('RankingPublico')}
+  style={{
+    backgroundColor: '#f59e0b',
+    padding: 22,
+    borderRadius: 16,
+    marginBottom: 20,
+  }}
+>
+  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+    🏆 Ranking Geral
+  </Text>
+</Pressable>
 
         <Pressable
           onPress={() => navigation.navigate('MinhasCartelas')}
@@ -76,7 +87,6 @@ export default function HomeUser({ navigation }) {
             backgroundColor: '#16a34a',
             padding: 22,
             borderRadius: 16,
-            elevation: 4,
           }}
         >
           <Text
@@ -84,56 +94,21 @@ export default function HomeUser({ navigation }) {
               color: '#fff',
               fontSize: 18,
               fontWeight: 'bold',
-              marginBottom: 4,
             }}
           >
             Minhas Cartelas
           </Text>
 
-          <Text
-            style={{
-              color: '#dcfce7',
-              fontSize: 14,
-            }}
-          >
-            Veja suas compras e status
+          <Text style={{ color: '#dcfce7', marginTop: 4 }}>
+            Acompanhe suas compras
           </Text>
         </Pressable>
       </View>
 
-      {/* Footer + Logout */}
-      <View>
-        <Text
-          style={{
-            textAlign: 'center',
-            color: '#94a3b8',
-            marginBottom: 12,
-          }}
-        >
-          Boa sorte 🍀
-        </Text>
-
-        <Pressable
-          onPress={logout}
-          style={{
-            backgroundColor: '#dc2626',
-            padding: 14,
-            borderRadius: 12,
-            alignItems: 'center',
-			
-          }}
-        >
-          <Text
-            style={{
-              color: '#fff',
-              fontWeight: 'bold',
-              fontSize: 16,
-            }}
-          >
-            Sair da Conta
-          </Text>
-        </Pressable>
-      </View>
+      {/* Footer */}
+      <Text style={{ textAlign: 'center', color: '#94a3b8' }}>
+        Boa sorte 🍀
+      </Text>
     </View>
   );
 }

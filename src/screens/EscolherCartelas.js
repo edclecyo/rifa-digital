@@ -8,6 +8,7 @@ import {
   updateDoc,
   doc,
   Timestamp,
+  addDoc,
 } from 'firebase/firestore';
 
 const VALOR_CARTELA = 2;
@@ -51,14 +52,26 @@ export default function EscolherCartelas({ navigation }) {
     }
 
     try {
+      // 🔹 1. Marca cartelas como vendidas
       for (const cartela of selecionadas) {
         await updateDoc(doc(db, 'Cartelas', cartela.id), {
           vendida: true,
           userId: user.uid,
-          userNome: profile?.nome || user.email, // <- SALVA O NOME DO USUÁRIO
+          userNome: profile?.nome || user.email,
           vendidaEm: Timestamp.now(),
         });
       }
+
+      // 🔹 2. REGISTRA O PAGAMENTO (NOVO 🔥)
+      await addDoc(collection(db, 'Pagamentos'), {
+        userId: user.uid,
+        userNome: profile?.nome || user.email,
+        quantidade: selecionadas.length,
+        valorTotal: selecionadas.length * VALOR_CARTELA,
+        metodo: 'PIX',
+        status: 'aprovado',
+        criadoEm: Timestamp.now(),
+      });
 
       Alert.alert(
         'Sucesso',

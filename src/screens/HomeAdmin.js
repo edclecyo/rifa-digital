@@ -1,4 +1,4 @@
-import { View, Text, Pressable } from 'react-native';
+import { View, Text, Pressable, ScrollView } from 'react-native';
 import { useContext } from 'react';
 import { AuthContext } from '../contexts/AuthContext';
 
@@ -11,11 +11,10 @@ export default function HomeAdmin({ navigation }) {
         flex: 1,
         backgroundColor: '#0f172a',
         padding: 20,
-        justifyContent: 'space-between',
       }}
     >
       {/* Header */}
-      <View style={{ marginTop: 40 }}>
+      <View style={{ marginTop: 40, marginBottom: 20 }}>
         <Text
           style={{
             fontSize: 28,
@@ -33,111 +32,147 @@ export default function HomeAdmin({ navigation }) {
             color: '#cbd5f5',
           }}
         >
-          Painel de controle
+          Painel de controle do sistema
         </Text>
       </View>
 
       {/* Cards */}
-      <View>
-        {/* 🔥 BOTÃO - Criar Cartelas (MODO CRIAR) */}
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {/* 🔥 Criar Cartelas */}
         <Pressable
           onPress={() =>
-            navigation.navigate('CriarCartela', {
-              modo: 'criar',
-            })
+            navigation.navigate('CriarCartela', { modo: 'criar' })
           }
           style={{
             backgroundColor: '#9333ea',
             padding: 22,
             borderRadius: 16,
-            marginBottom: 20,
-            elevation: 4,
+            marginBottom: 16,
           }}
         >
-          <Text
-            style={{
-              color: '#fff',
-              fontSize: 18,
-              fontWeight: 'bold',
-              marginBottom: 4,
-            }}
-          >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
             Criar Cartelas
           </Text>
-
-          <Text
-            style={{
-              color: '#f3e8ff',
-              fontSize: 14,
-            }}
-          >
+          <Text style={{ color: '#f3e8ff', marginTop: 4 }}>
             Gerar novas cartelas da rifa
           </Text>
         </Pressable>
 
-        {/* EXISTENTE */}
+        {/* 📊 Dashboard */}
+        <Pressable
+          onPress={() => navigation.navigate('AdminDashboard')}
+          style={{
+            backgroundColor: '#0ea5e9',
+            padding: 22,
+            borderRadius: 16,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+            Dashboard
+          </Text>
+          <Text style={{ color: '#e0f2fe', marginTop: 4 }}>
+            Métricas e desempenho
+          </Text>
+        </Pressable>
+
+        {/* 🎯 Gerenciar Rifas */}
         <Pressable
           onPress={() => navigation.navigate('AdminRifas')}
           style={{
             backgroundColor: '#2563eb',
             padding: 22,
             borderRadius: 16,
-            marginBottom: 20,
-            elevation: 4,
+            marginBottom: 16,
           }}
         >
-          <Text
-            style={{
-              color: '#fff',
-              fontSize: 18,
-              fontWeight: 'bold',
-              marginBottom: 4,
-            }}
-          >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
             Gerenciar Rifas
           </Text>
-
-          <Text
-            style={{
-              color: '#e0e7ff',
-              fontSize: 14,
-            }}
-          >
+          <Text style={{ color: '#e0e7ff', marginTop: 4 }}>
             Criar, editar e encerrar rifas
           </Text>
         </Pressable>
 
-        {/* EXISTENTE */}
+        {/* 👥 Usuários */}
         <Pressable
           onPress={() => navigation.navigate('AdminUsuarios')}
           style={{
             backgroundColor: '#16a34a',
             padding: 22,
             borderRadius: 16,
-            elevation: 4,
+            marginBottom: 16,
           }}
         >
-          <Text
-            style={{
-              color: '#fff',
-              fontSize: 18,
-              fontWeight: 'bold',
-              marginBottom: 4,
-            }}
-          >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
             Usuários
           </Text>
-
-          <Text
-            style={{
-              color: '#dcfce7',
-              fontSize: 14,
-            }}
-          >
+          <Text style={{ color: '#dcfce7', marginTop: 4 }}>
             Visualizar e gerenciar usuários
           </Text>
         </Pressable>
-      </View>
+
+        {/* 💳 Pagamentos */}
+        <Pressable
+          onPress={() => navigation.navigate('AdminPagamentos')}
+          style={{
+            backgroundColor: '#f59e0b',
+            padding: 22,
+            borderRadius: 16,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+            Pagamentos
+          </Text>
+          <Text style={{ color: '#fef3c7', marginTop: 4 }}>
+            Histórico financeiro
+          </Text>
+        </Pressable>
+<Pressable
+  onPress={() => navigation.navigate('RankingCompradores')}
+  style={{
+    backgroundColor: '#f59e0b',
+    padding: 22,
+    borderRadius: 16,
+    marginBottom: 20,
+    elevation: 4,
+  }}
+>
+  <Text
+    style={{
+      color: '#fff',
+      fontSize: 18,
+      fontWeight: 'bold',
+      marginBottom: 4,
+    }}
+  >
+    🏆 Ranking de Compradores
+  </Text>
+
+  <Text style={{ color: '#fef3c7', fontSize: 14 }}>
+    Veja quem mais comprou cartelas
+  </Text>
+</Pressable>
+
+        {/* 🔔 Notificações */}
+        <Pressable
+          onPress={() => navigation.navigate('AdminNotificacoes')}
+          style={{
+            backgroundColor: '#ec4899',
+            padding: 22,
+            borderRadius: 16,
+            marginBottom: 30,
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+            Notificações
+          </Text>
+          <Text style={{ color: '#fce7f3', marginTop: 4 }}>
+            Enviar avisos aos usuários
+          </Text>
+        </Pressable>
+      </ScrollView>
 
       {/* Footer + Logout */}
       <View>
