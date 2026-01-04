@@ -2,13 +2,13 @@ import { View, Text, TextInput, Pressable, Alert } from 'react-native';
 import { useState } from 'react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth, db } from '../services/firebase';
-import { doc, setDoc, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 export default function Register({ navigation }) {
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
-  const [tipo, setTipo] = useState('user'); // user | admin
+  const [loading, setLoading] = useState(false);
 
   async function handleRegister() {
     if (!nome || !email || !senha) {
@@ -16,25 +16,36 @@ export default function Register({ navigation }) {
       return;
     }
 
+    if (senha.length < 6) {
+      Alert.alert('Erro', 'Senha mínima de 6 caracteres');
+      return;
+    }
+
     try {
+      setLoading(true);
+
       const cred = await createUserWithEmailAndPassword(
         auth,
         email,
         senha
       );
 
+      // 🔥 CRIA USUÁRIO NO FIRESTORE (OBRIGATÓRIO)
       await setDoc(doc(db, 'Usuarios', cred.user.uid), {
+        uid: cred.user.uid,
         nome,
         email,
-        tipo, // 👈 define se é user ou admin
-        criadoEm: Timestamp.now(),
+        tipo: 'user', // 🔐 SEMPRE user
+        criadoEm: serverTimestamp(),
       });
 
-      Alert.alert('Sucesso', 'Conta criada com sucesso');
+      Alert.alert('✅ Sucesso', 'Conta criada com sucesso');
       navigation.replace('Login');
     } catch (e) {
-      console.log(e);
+      console.log('Erro cadastro:', e);
       Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -48,7 +59,7 @@ export default function Register({ navigation }) {
         placeholder="Nome"
         value={nome}
         onChangeText={setNome}
-        style={{ borderWidth: 1, padding: 10, marginBottom: 10 }}
+        style={{ borderWidth: 1, padding: 12, marginBottom: 10 }}
       />
 
       <TextInput
@@ -56,7 +67,8 @@ export default function Register({ navigation }) {
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
-        style={{ borderWidth: 1, padding: 10, marginBottom: 10 }}
+        keyboardType="email-address"
+        style={{ borderWidth: 1, padding: 12, marginBottom: 10 }}
       />
 
       <TextInput
@@ -64,41 +76,20 @@ export default function Register({ navigation }) {
         secureTextEntry
         value={senha}
         onChangeText={setSenha}
-        style={{ borderWidth: 1, padding: 10, marginBottom: 15 }}
+        style={{ borderWidth: 1, padding: 12, marginBottom: 20 }}
       />
-
-      {/* BOTÕES DE TIPO */}
-      <View style={{ flexDirection: 'row', marginBottom: 15 }}>
-        <Pressable
-          onPress={() => setTipo('user')}
-          style={{
-            flex: 1,
-            padding: 10,
-            backgroundColor: tipo === 'user' ? '#16a34a' : '#e5e7eb',
-            marginRight: 5,
-          }}
-        >
-          <Text style={{ textAlign: 'center' }}>Usuário</Text>
-        </Pressable>
-
-        <Pressable
-          onPress={() => setTipo('admin')}
-          style={{
-            flex: 1,
-            padding: 10,
-            backgroundColor: tipo === 'admin' ? '#dc2626' : '#e5e7eb',
-          }}
-        >
-          <Text style={{ textAlign: 'center' }}>Admin</Text>
-        </Pressable>
-      </View>
 
       <Pressable
         onPress={handleRegister}
-        style={{ backgroundColor: '#2563eb', padding: 15 }}
+        disabled={loading}
+        style={{
+          backgroundColor: '#2563eb',
+          padding: 16,
+          opacity: loading ? 0.6 : 1,
+        }}
       >
-        <Text style={{ color: '#fff', textAlign: 'center' }}>
-          Cadastrar
+        <Text style={{ color: '#fff', textAlign: 'center', fontSize: 16 }}>
+          {loading ? 'Criando...' : 'Cadastrar'}
         </Text>
       </Pressable>
     </View>

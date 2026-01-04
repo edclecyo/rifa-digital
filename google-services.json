@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "763080965700",
+    "project_id": "rifa-digital-f6425",
+    "storage_bucket": "rifa-digital-f6425.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:763080965700:android:29ff42c512d59afe080611",
+        "android_client_info": {
+          "package_name": "com.edclecyo.rifadigital"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCVAYNr-vn9t4ePBD7B4abaxE-LZb14D5Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

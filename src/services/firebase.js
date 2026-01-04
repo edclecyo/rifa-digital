@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   initializeAuth,
   getReactNativePersistence,
@@ -10,15 +10,22 @@ const firebaseConfig = {
   apiKey: 'AIzaSyDUga-GB_sOvvZd9kfwQGybx5I24kqLLgY',
   authDomain: 'rifa-digital-f6425.firebaseapp.com',
   projectId: 'rifa-digital-f6425',
-  storageBucket: 'rifa-digital-f6425.firebasestorage.app',
+  storageBucket: 'rifa-digital-f6425.appspot.com',
   messagingSenderId: '763080965700',
   appId: '1:763080965700:web:759c59dbc8e6a0e2080611',
 };
 
-const app = initializeApp(firebaseConfig);
+// 🔥 EVITA INICIALIZAR DUAS VEZES
+const app = getApps().length === 0
+  ? initializeApp(firebaseConfig)
+  : getApp();
 
+// 🔐 AUTH COM PERSISTÊNCIA
 export const auth = initializeAuth(app, {
   persistence: getReactNativePersistence(AsyncStorage),
 });
 
+// 📦 FIRESTORE
 export const db = getFirestore(app);
+
+export default app;

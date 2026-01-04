@@ -1,91 +1,99 @@
 import { View, Text, FlatList } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useContext } from 'react';
 import { db } from '../services/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-
-const PREMIOS = {
-  1: 500,
-  2: 300,
-  3: 200,
-};
+import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import * as Notifications from 'expo-notifications';
+import ConfettiCannon from 'react-native-confetti-cannon';
+import RankingItem from '../components/RankingItem';
+import { AuthContext } from '../contexts/AuthContext';
 
 export default function RankingPublico() {
+  const { user } = useContext(AuthContext);
   const [ranking, setRanking] = useState([]);
+  const [confetti, setConfetti] = useState(false);
+  const posicaoAnterior = useRef(null);
 
   useEffect(() => {
-    carregarRanking();
-  }, []);
-
-  async function carregarRanking() {
     const q = query(
-      collection(db, 'Cartelas'),
-      where('vendida', '==', true)
+      collection(db, 'RankingCompradores'),
+      orderBy('quantidade', 'desc')
     );
 
-    const snap = await getDocs(q);
-
-    const mapa = {};
-
-    snap.docs.forEach(doc => {
-      const c = doc.data();
-      if (!mapa[c.userId]) {
-        mapa[c.userId] = {
-          userId: c.userId,
-          nome: c.userNome || 'Usuário',
-          total: 0,
-        };
-      }
-      mapa[c.userId].total += 1;
-    });
-
-    const lista = Object.values(mapa)
-      .sort((a, b) => b.total - a.total)
-      .map((item, index) => ({
-        ...item,
+    const unsub = onSnapshot(q, async (snap) => {
+      const lista = snap.docs.map((doc, index) => ({
+        id: doc.id,
         posicao: index + 1,
-        premio: PREMIOS[index + 1] || 0,
+        userId: doc.data().userId,
+        userNome: doc.data().nome || 'Usuário', // ✅ CAMPO CERTO
+        quantidade: doc.data().quantidade || 0,
+        valorTotal: doc.data().total || 0,     // ✅ CAMPO CERTO
       }));
 
-    setRanking(lista);
-  }
+      setRanking(lista);
 
-  function medalha(pos) {
-    if (pos === 1) return '🥇';
-    if (pos === 2) return '🥈';
-    if (pos === 3) return '🥉';
-    return `${pos}º`;
-  }
+      if (!user) return;
+
+      const minhaPosicao = lista.find(
+        i => i.userId === user.uid
+      )?.posicao;
+
+      if (!minhaPosicao) return;
+
+      // 🔔 Subiu no ranking
+      if (
+        posicaoAnterior.current &&
+        minhaPosicao < posicaoAnterior.current
+      ) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: '🏆 Ranking',
+            body: `Você subiu para ${minhaPosicao}º lugar!`,
+          },
+          trigger: null,
+        });
+
+        // 🎉 Virou líder
+        if (minhaPosicao === 1) {
+          setConfetti(true);
+        }
+      }
+
+      posicaoAnterior.current = minhaPosicao;
+    });
+
+    return unsub;
+  }, [user]);
 
   return (
-    <View style={{ flex: 1, padding: 20 }}>
-      <Text style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 20 }}>
+    <View style={{ flex: 1, backgroundColor: '#020617', padding: 16 }}>
+      {confetti && (
+        <ConfettiCannon
+          count={220}
+          origin={{ x: 200, y: 0 }}
+          fadeOut
+          onAnimationEnd={() => setConfetti(false)}
+        />
+      )}
+
+      <Text
+        style={{
+          fontSize: 26,
+          fontWeight: 'bold',
+          color: '#fff',
+          marginBottom: 12,
+        }}
+      >
         🏆 Ranking Geral
       </Text>
 
       <FlatList
         data={ranking}
-        keyExtractor={item => item.userId}
+        keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <View
-            style={{
-              padding: 15,
-              borderRadius: 12,
-              marginBottom: 12,
-              backgroundColor: '#f1f5f9',
-            }}
-          >
-            <Text style={{ fontSize: 18, fontWeight: 'bold' }}>
-              {medalha(item.posicao)} {item.nome}
-            </Text>
-
-            <Text>🎟️ Cartelas: {item.total}</Text>
-
-            {item.premio > 0 && (
-              <Text style={{ color: '#16a34a', fontWeight: 'bold' }}>
-                💰 Prêmio: R$ {item.premio}
-              </Text>
-            )}
-          </View>
+          <RankingItem
+            item={item}
+            isMe={item.userId === user?.uid}
+          />
         )}
       />
     </View>

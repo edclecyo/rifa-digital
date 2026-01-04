@@ -1,52 +1,44 @@
 import { View, Text, Pressable, ActivityIndicator, Alert } from 'react-native';
 import { useState } from 'react';
-import { db } from '../services/firebase';
-import {
-  collection,
-  writeBatch,
-  doc,
-  Timestamp,
-} from 'firebase/firestore';
-
-const TOTAL_CARTELAS = 1000;
-const NUMEROS_POR_CARTELA = 6;
-
-function gerarNumeros() {
-  const set = new Set();
-  while (set.size < NUMEROS_POR_CARTELA) {
-    set.add(Math.floor(Math.random() * 60) + 1);
-  }
-  return Array.from(set).sort((a, b) => a - b);
-}
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { app } from '../services/firebase';
 
 export default function CriarCartela() {
   const [loading, setLoading] = useState(false);
 
   async function criarCartelas() {
+    if (loading) return;
+
     try {
       setLoading(true);
 
-      const batch = writeBatch(db);
-      const ref = collection(db, 'Cartelas');
+      const functions = getFunctions(app);
+      const criarCartelasFn = httpsCallable(
+        functions,
+        'criarCartelasAutomatico'
+      );
 
-      for (let i = 0; i < TOTAL_CARTELAS; i++) {
-        const cartelaRef = doc(ref);
+      const res = await criarCartelasFn();
 
-        batch.set(cartelaRef, {
-          numeros: gerarNumeros(),
-          vendida: false,
-          userId: null,
-          valor: 2,
-          criadoEm: Timestamp.now(),
-        });
+      Alert.alert(
+  '✅ Sucesso',
+  `Cartelas criadas com sucesso\nRodada: ${res.data.rodada}`
+);
+    } catch (error) {
+      console.log('❌ Erro criar cartelas:', error);
+
+      if (error?.code === 'functions/unauthenticated') {
+        Alert.alert(
+          'Login necessário',
+          'Você precisa estar logado como admin.'
+        );
+        return;
       }
 
-      await batch.commit();
-
-      Alert.alert('Sucesso', '✅ Cartelas criadas com sucesso!');
-    } catch (error) {
-      console.log(error);
-      Alert.alert('Erro', 'Erro ao criar cartelas');
+      Alert.alert(
+        'Erro',
+        error?.message || 'Erro ao criar cartelas'
+      );
     } finally {
       setLoading(false);
     }
@@ -80,7 +72,7 @@ export default function CriarCartela() {
           marginBottom: 30,
         }}
       >
-        Gerar {TOTAL_CARTELAS} cartelas automaticamente
+        Geração automática até o limite de 1600 cartelas
       </Text>
 
       <Pressable
@@ -103,7 +95,7 @@ export default function CriarCartela() {
               fontWeight: 'bold',
             }}
           >
-            Criar Cartelas no Banco
+            Criar Cartelas
           </Text>
         )}
       </Pressable>

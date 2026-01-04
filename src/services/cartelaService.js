@@ -1,40 +1,55 @@
 import {
   collection,
-  addDoc,
   query,
   where,
-  orderBy,
   onSnapshot,
   serverTimestamp,
 } from 'firebase/firestore';
 
-import { db } from './firebase';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
-// Salvar cartela
-export async function salvarCartela({ user, numeros }) {
-  return await addDoc(collection(db, 'Cartelas'), {
-    userId: user.uid,       // nome do campo consistente
-    numeros,
-    vendida: false,
-    criadoEm: serverTimestamp(),
-    vendidaEm: null,        // garante que o campo existe
-    userNome: user.displayName || user.email, // opcional
-  });
+import { db, app } from './firebase';
+
+/**
+ * 🔹 Comprar cartela (Cloud Function)
+ */
+export async function comprarCartela(cartelaId) {
+  const functions = getFunctions(app);
+  const comprarCartelaFn = httpsCallable(functions, 'comprarCartela');
+
+  return await comprarCartelaFn({ cartelaId });
 }
 
-// Escutar cartelas do usuário
+/**
+ * 🔹 Escutar cartelas do usuário
+ */
 export function escutarCartelas(uid, callback) {
   const q = query(
     collection(db, 'Cartelas'),
-    where('userId', '==', uid),
-    orderBy('vendidaEm','criadoEm', 'desc')   // ordem DESC
+    where('userId', '==', uid)
   );
 
-  return onSnapshot(q, (snap) => {
-    const lista = snap.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
-    callback(lista);
-  });
+  return onSnapshot(
+    q,
+    (snap) => {
+      const lista = snap.docs
+        .map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }))
+        .filter((c) => c.criadoEm)
+        .sort((a, b) => {
+          const aTime =
+            a.vendidaEm?.toMillis?.() || a.criadoEm.toMillis();
+          const bTime =
+            b.vendidaEm?.toMillis?.() || b.criadoEm.toMillis();
+          return bTime - aTime;
+        });
+
+      callback(lista);
+    },
+    (error) => {
+      console.error('❌ Erro escutarCartelas:', error);
+    }
+  );
 }

@@ -7,6 +7,7 @@ import AdminDashboard from '../screens/AdminDashboard';
 const Stack = createNativeStackNavigator();
 import AdminPagamentos from '../screens/AdminPagamentos';
 import RankingCompradores from '../screens/RankingCompradores';
+import AdminPromocaoHome from '../screens/AdminPromocaoHome';
 export default function AdminRoutes() {
   return (
     <Stack.Navigator>
@@ -17,6 +18,7 @@ export default function AdminRoutes() {
 <Stack.Screen name="AdminDashboard" component={AdminDashboard}  options={{ title: 'Dashboard' }} />  
 <Stack.Screen name="AdminPagamentos" component={AdminPagamentos}  options={{ title: 'Pagamentos' }} /> 
 <Stack.Screen name="RankingCompradores" component={RankingCompradores} options={{ title: 'Ranking de Compradores' }} />  
+  <Stack.Screen name="AdminPromocaoHome" component={AdminPromocaoHome} />
   </Stack.Navigator>
   );
 }

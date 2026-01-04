@@ -1,22 +1,27 @@
 import { View, Text, FlatList } from 'react-native';
 import { useContext, useEffect, useState } from 'react';
 import { AuthContext } from '../contexts/AuthContext';
-import { escutarCartelas } from '../services/cartelaService'; // use a função que criamos
+import { escutarCartelas } from '../services/cartelaService';
 
 export default function MinhasCartelas() {
   const { user } = useContext(AuthContext);
   const [cartelas, setCartelas] = useState([]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user?.uid) return;
 
-    // Usa a função escutarCartelas, que já lida com vendidaEm
+    // 🔥 Escuta em tempo real
     const unsubscribe = escutarCartelas(user.uid, (lista) => {
       setCartelas(lista);
     });
 
     return unsubscribe;
-  }, [user]);
+  }, [user?.uid]);
+
+  function formatarData(timestamp) {
+    if (!timestamp?.toDate) return '—';
+    return timestamp.toDate().toLocaleString('pt-BR');
+  }
 
   return (
     <View style={{ flex: 1, padding: 20 }}>
@@ -55,23 +60,32 @@ export default function MinhasCartelas() {
               style={{
                 fontWeight: 'bold',
                 fontSize: 16,
-                marginBottom: 5,
+                marginBottom: 6,
               }}
             >
-              Cartela #{item.id}
+              🎟️ Cartela #{item.id}
             </Text>
 
-            <Text style={{ marginBottom: 5 }}>
-              🔢 Números: {item.numeros?.join(' - ')}
+            <Text style={{ marginBottom: 4 }}>
+              🔢 Números:{' '}
+              {item.numeros?.length
+                ? item.numeros.join(' - ')
+                : '—'}
             </Text>
 
-            <Text style={{ marginBottom: 5 }}>
-              💰 Valor: R$ {item.valor?.toFixed(2) || '2.00'}
+            <Text style={{ marginBottom: 4 }}>
+              💰 Valor: R$ {Number(item.valor || 2.5).toFixed(2)}
             </Text>
 
             {item.userNome && (
-              <Text style={{ marginBottom: 5 }}>
+              <Text style={{ marginBottom: 4 }}>
                 👤 Comprador: {item.userNome}
+              </Text>
+            )}
+
+            {item.vendidaEm && (
+              <Text style={{ marginBottom: 6 }}>
+                🕒 Comprada em: {formatarData(item.vendidaEm)}
               </Text>
             )}
 
