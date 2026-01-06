@@ -17,13 +17,19 @@ export default function AdminPagamentos() {
       orderBy('criadoEm', 'desc')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const lista = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-      setPagamentos(lista);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const lista = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+        setPagamentos(lista);
+      },
+      (error) => {
+        console.log('Erro ao carregar pagamentos:', error);
+      }
+    );
 
     return unsubscribe;
   }, []);
@@ -51,6 +57,17 @@ export default function AdminPagamentos() {
         data={pagamentos}
         keyExtractor={(item) => item.id}
         showsVerticalScrollIndicator={false}
+        ListEmptyComponent={() => (
+          <Text
+            style={{
+              color: '#94a3b8',
+              textAlign: 'center',
+              marginTop: 40,
+            }}
+          >
+            Nenhum pagamento encontrado
+          </Text>
+        )}
         renderItem={({ item }) => (
           <View
             style={{
@@ -65,11 +82,11 @@ export default function AdminPagamentos() {
             </Text>
 
             <Text style={{ color: '#cbd5f5', marginTop: 4 }}>
-              💰 R$ {item.valor?.toFixed(2)}
+              💰 R$ {Number(item.valor || 0).toFixed(2)}
             </Text>
 
             <Text style={{ color: '#cbd5f5' }}>
-              💳 {item.tipo?.toUpperCase()}
+              💳 {(item.tipo || 'desconhecido').toUpperCase()}
             </Text>
 
             <Text
@@ -79,7 +96,7 @@ export default function AdminPagamentos() {
                 color: statusColor(item.status),
               }}
             >
-              {item.status?.toUpperCase()}
+              {(item.status || 'indefinido').toUpperCase()}
             </Text>
           </View>
         )}

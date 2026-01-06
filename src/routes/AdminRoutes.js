@@ -8,6 +8,10 @@ const Stack = createNativeStackNavigator();
 import AdminPagamentos from '../screens/AdminPagamentos';
 import RankingCompradores from '../screens/RankingCompradores';
 import AdminPromocaoHome from '../screens/AdminPromocaoHome';
+import HistoricoSorteios from '../screens/HistoricoSorteios';
+import StatusSorteio from '../screens/StatusSorteio';
+import AdminDashboardRodada from '../screens/AdminDashboardRodada';
+
 export default function AdminRoutes() {
   return (
     <Stack.Navigator>
@@ -18,7 +22,13 @@ export default function AdminRoutes() {
 <Stack.Screen name="AdminDashboard" component={AdminDashboard}  options={{ title: 'Dashboard' }} />  
 <Stack.Screen name="AdminPagamentos" component={AdminPagamentos}  options={{ title: 'Pagamentos' }} /> 
 <Stack.Screen name="RankingCompradores" component={RankingCompradores} options={{ title: 'Ranking de Compradores' }} />  
-  <Stack.Screen name="AdminPromocaoHome" component={AdminPromocaoHome} />
+<Stack.Screen name="StatusSorteio" component={StatusSorteio} options={{ title: 'StatusSorteio' }} />
+<Stack.Screen name="AdminDashboardRodada" component={AdminDashboardRodada} options={{ title: 'AdminDashboardRodada' }} />
+ <Stack.Screen
+  name="HistoricoSorteios"
+  component={HistoricoSorteios}
+/>
+ <Stack.Screen name="AdminPromocaoHome" component={AdminPromocaoHome} />
   </Stack.Navigator>
   );
 }

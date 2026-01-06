@@ -1,53 +1,64 @@
 import { View, Text, ScrollView, Dimensions } from 'react-native';
 import { useEffect, useState } from 'react';
 import { db } from '../services/firebase';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, doc } from 'firebase/firestore';
 import Svg, { Rect } from 'react-native-svg';
 
 const WIDTH = Dimensions.get('window').width - 40;
 const VALOR_CARTELA = 2.5;
 
-export default function AdminDashboard() {
+export default function AdminDashboardRodada() {
+  const [rodadaAtual, setRodadaAtual] = useState(null);
   const [stats, setStats] = useState({
-    totalCartelas: 0,
+    total: 0,
     vendidas: 0,
     faturamento: 0,
-    usuarios: 0,
   });
 
+  // 🔄 Rodada atual
   useEffect(() => {
+    const unsubRodada = onSnapshot(
+      doc(db, 'Rodadas', 'atual'),
+      (snap) => {
+        if (snap.exists()) {
+          setRodadaAtual(snap.data().numero);
+        }
+      }
+    );
+
+    return unsubRodada;
+  }, []);
+
+  // 📊 Dados da rodada
+  useEffect(() => {
+    if (!rodadaAtual) return;
+
     const unsubCartelas = onSnapshot(
       collection(db, 'Cartelas'),
       (snap) => {
-        const cartelas = snap.docs.map(d => d.data());
+        const cartelas = snap.docs
+          .map(d => d.data())
+          .filter(c => c.rodada === rodadaAtual);
+
         const vendidas = cartelas.filter(
           c => c.status === 'vendida'
         );
 
-        setStats(prev => ({
-          ...prev,
-          totalCartelas: cartelas.length,
+        setStats({
+          total: cartelas.length,
           vendidas: vendidas.length,
           faturamento: vendidas.length * VALOR_CARTELA,
-        }));
+        });
       }
     );
 
-    const unsubUsuarios = onSnapshot(
-      collection(db, 'Usuarios'),
-      (snap) => {
-        setStats(prev => ({
-          ...prev,
-          usuarios: snap.size,
-        }));
-      }
-    );
+    return unsubCartelas;
+  }, [rodadaAtual]);
 
-    return () => {
-      unsubCartelas();
-      unsubUsuarios();
-    };
-  }, []);
+  const vendidasPct =
+    stats.total > 0 ? (stats.vendidas / stats.total) * WIDTH : 0;
+
+  const disponiveisPct = WIDTH - vendidasPct;
 
   function Card({ title, value }) {
     return (
@@ -69,13 +80,6 @@ export default function AdminDashboard() {
     );
   }
 
-  const vendidasPct =
-    stats.totalCartelas > 0
-      ? (stats.vendidas / stats.totalCartelas) * WIDTH
-      : 0;
-
-  const disponiveisPct = WIDTH - vendidasPct;
-
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: '#0f172a', padding: 20 }}
@@ -88,17 +92,16 @@ export default function AdminDashboard() {
           marginBottom: 20,
         }}
       >
-        📊 Dashboard Admin
+        🎯 Dashboard por Rodada
       </Text>
 
-      {/* CARDS */}
-      <Card title="Total de Cartelas" value={stats.totalCartelas} />
+      <Card title="Rodada Atual" value={rodadaAtual ?? '—'} />
+      <Card title="Total de Cartelas" value={stats.total} />
       <Card title="Cartelas Vendidas" value={stats.vendidas} />
       <Card
         title="Faturamento (R$)"
         value={stats.faturamento.toFixed(2)}
       />
-      <Card title="Usuários Cadastrados" value={stats.usuarios} />
 
       {/* GRÁFICO */}
       <Text
@@ -109,7 +112,7 @@ export default function AdminDashboard() {
           marginVertical: 16,
         }}
       >
-        📈 Vendas de Cartelas
+        📈 Progresso da Rodada
       </Text>
 
       <Svg height="40" width={WIDTH}>
@@ -140,7 +143,7 @@ export default function AdminDashboard() {
           Vendidas: {stats.vendidas}
         </Text>
         <Text style={{ color: '#cbd5f5' }}>
-          Disponíveis: {stats.totalCartelas - stats.vendidas}
+          Disponíveis: {stats.total - stats.vendidas}
         </Text>
       </View>
     </ScrollView>

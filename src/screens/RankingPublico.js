@@ -7,11 +7,23 @@ import ConfettiCannon from 'react-native-confetti-cannon';
 import RankingItem from '../components/RankingItem';
 import { AuthContext } from '../contexts/AuthContext';
 
+/* 🔔 Configuração das notificações */
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
 export default function RankingPublico() {
   const { user } = useContext(AuthContext);
+
   const [ranking, setRanking] = useState([]);
   const [confetti, setConfetti] = useState(false);
+
   const posicaoAnterior = useRef(null);
+  const confeteDisparado = useRef(false);
 
   useEffect(() => {
     const q = query(
@@ -19,50 +31,55 @@ export default function RankingPublico() {
       orderBy('quantidade', 'desc')
     );
 
-    const unsub = onSnapshot(q, async (snap) => {
+    const unsub = onSnapshot(q, snap => {
       const lista = snap.docs.map((doc, index) => ({
         id: doc.id,
         posicao: index + 1,
         userId: doc.data().userId,
-        userNome: doc.data().nome || 'Usuário', // ✅ CAMPO CERTO
+        userNome: doc.data().nome || 'Usuário',
         quantidade: doc.data().quantidade || 0,
-        valorTotal: doc.data().total || 0,     // ✅ CAMPO CERTO
+        valorTotal: doc.data().total || 0,
       }));
 
       setRanking(lista);
 
-      if (!user) return;
+      if (!user?.uid) return;
 
       const minhaPosicao = lista.find(
-        i => i.userId === user.uid
+        item => item.userId === user.uid
       )?.posicao;
 
       if (!minhaPosicao) return;
 
-      // 🔔 Subiu no ranking
+      /* 🔔 Subiu no ranking */
       if (
         posicaoAnterior.current &&
         minhaPosicao < posicaoAnterior.current
       ) {
-        await Notifications.scheduleNotificationAsync({
+        Notifications.scheduleNotificationAsync({
           content: {
             title: '🏆 Ranking',
             body: `Você subiu para ${minhaPosicao}º lugar!`,
           },
           trigger: null,
         });
+      }
 
-        // 🎉 Virou líder
-        if (minhaPosicao === 1) {
-          setConfetti(true);
-        }
+      /* 🎉 Virou líder (confete 1x) */
+      if (minhaPosicao === 1 && !confeteDisparado.current) {
+        setConfetti(true);
+        confeteDisparado.current = true;
+      }
+
+      if (minhaPosicao !== 1) {
+        confeteDisparado.current = false;
       }
 
       posicaoAnterior.current = minhaPosicao;
     });
 
     return unsub;
-  }, [user]);
+  }, [user?.uid]);
 
   return (
     <View style={{ flex: 1, backgroundColor: '#020617', padding: 16 }}>
@@ -88,7 +105,8 @@ export default function RankingPublico() {
 
       <FlatList
         data={ranking}
-        keyExtractor={(item) => item.id}
+        keyExtractor={item => item.id}
+        showsVerticalScrollIndicator={false}
         renderItem={({ item }) => (
           <RankingItem
             item={item}

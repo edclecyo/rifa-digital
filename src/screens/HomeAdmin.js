@@ -89,7 +89,19 @@ export default function HomeAdmin({ navigation }) {
             Banner, prêmio, contador e CTA
           </Text>
         </Pressable>
-
+<Pressable
+  onPress={() => navigation.navigate('AdminDashboardRodada')}
+  style={{
+    backgroundColor: '#64748b',
+    padding: 22,
+    borderRadius: 16,
+    marginBottom: 16,
+  }}
+>
+  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+    🎯 Dashboard por Rodada
+  </Text>
+</Pressable>
         {/* 📊 Dashboard */}
         <Pressable
           onPress={() => navigation.navigate('AdminDashboard')}
@@ -107,10 +119,24 @@ export default function HomeAdmin({ navigation }) {
             Métricas e desempenho
           </Text>
         </Pressable>
-
-        {/* 👥 Usuários */}
+		{/* 🔥 Historico Sorteios */}
         <Pressable
-          onPress={() => navigation.navigate('AdminUsuarios')}
+          onPress={() => navigation.navigate('HistoricoSorteios')}
+          style={{
+            backgroundColor: '#9333ea',
+            padding: 22,
+            borderRadius: 16,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+            🏆 Histórico de Sorteios
+          </Text>
+        </Pressable>
+
+        {/* 👥 status de Sorteios */}
+        <Pressable
+          onPress={() => navigation.navigate('StatusSorteio')}
           style={{
             backgroundColor: '#16a34a',
             padding: 22,
@@ -119,7 +145,7 @@ export default function HomeAdmin({ navigation }) {
           }}
         >
           <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-            Usuários
+            Status de Sorteios
           </Text>
           <Text style={{ color: '#dcfce7', marginTop: 4 }}>
             Visualizar e gerenciar usuários
