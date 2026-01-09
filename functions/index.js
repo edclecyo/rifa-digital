@@ -1,11 +1,16 @@
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+const crypto = require("crypto");
+const { Parser } = require("json2csv");
+const os = require("os");
+const path = require("path");
+const fs = require("fs");
 
 admin.initializeApp();
 const db = admin.firestore();
 
 /* ===============================
-   🔧 CONFIGURAÇÕES
+   🔧 CONFIGURAÇÕES GERAIS
 ================================ */
 const SUPER_ADMIN_UID = "WttevCDh6haanBH0v98nggOsBm62";
 const TOTAL_CARTELAS = 1600;
@@ -14,148 +19,188 @@ const LIMITE_BATCH = 500;
 const TEMPO_RESERVA_MS = 15 * 1000;
 
 /* ===============================
-   🔐 DEFINIR ADMIN
+   🚦 FEATURE FLAGS
 ================================ */
-exports.definirAdmin = functions.https.onCall(async (data, context) => {
-  if (!context.auth)
-    throw new functions.https.HttpsError("unauthenticated");
+const CONFIG = {
+  SORTEIO_ATIVO: true,
+  SAQUE_ATIVO: true,
+};
 
-  if (context.auth.uid !== SUPER_ADMIN_UID)
-    throw new functions.https.HttpsError("permission-denied");
+/* ===============================
+   💰 VALORES
+================================ */
+const VALOR_CARTELA = 2.5;
+const VALOR_SORTEIO = 2.0;
+const VALOR_PLATAFORMA = 0.25;
+const VALOR_INDICACAO = 0.25;
 
-  const { uid } = data;
-  if (!uid)
-    throw new functions.https.HttpsError("invalid-argument");
+/* ===============================
+   🎯 METAS
+================================ */
+const METAS = [
+  { cartelas: 100, premio: 100, nivel: "vermelho" },
+  { cartelas: 500, premio: 500, nivel: "verde" },
+  { cartelas: 1000, premio: 1000, nivel: "dourado" },
+];
 
-  await admin.auth().setCustomUserClaims(uid, { admin: true });
-
-  await db.collection("Usuarios").doc(uid).set(
-    {
-      tipo: "admin",
-      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  return { success: true };
-});
+/* ===============================
+   🔐 HASH AUDITORIA
+================================ */
+function gerarHash(payload, hashAnterior = "") {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(payload) + hashAnterior)
+    .digest("hex");
+}
 
 /* ===============================
    👤 CRIAR USUÁRIO
 ================================ */
-exports.criarUsuarioAoRegistrar = functions.auth.user().onCreate(async user => {
-  await db.collection("Usuarios").doc(user.uid).set({
-    uid: user.uid,
-    email: user.email || null,
-    nome: user.displayName || "Usuário",
-    tipo: "user",
-    criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-  });
-});
-
-/* ===============================
-   🎯 GERAR NÚMEROS
-================================ */
-function gerarNumeros() {
-  const set = new Set();
-  while (set.size < NUMEROS_POR_CARTELA) {
-    set.add(Math.floor(Math.random() * 60) + 1);
-  }
-  return Array.from(set).sort((a, b) => a - b);
-}
-
-/* ===============================
-   🎟️ CRIAR CARTELAS
-================================ */
-exports.criarCartelasAutomatico = functions.https.onCall(async (_, context) => {
-  if (!context.auth || !context.auth.token.admin)
-    throw new functions.https.HttpsError("permission-denied");
-
-  const rodadaRef = db.collection("Rodadas").doc("atual");
-  const rodadaSnap = await rodadaRef.get();
-  const rodada = rodadaSnap.exists ? rodadaSnap.data().numero + 1 : 1;
-
-  let batch = db.batch();
-  let count = 0;
-
-  for (let i = 0; i < TOTAL_CARTELAS; i++) {
-    const codigo = i.toString().padStart(6, "0");
-    const ref = db.collection("Cartelas").doc(`${rodada}_${codigo}`);
-
-    batch.set(ref, {
-      rodada,
-      codigo,
-      numeros: gerarNumeros(),
-      status: "disponivel",
-      fila: [],
-      reservadaPor: null,
-      reservaExpiraEm: null,
-      userId: null,
+exports.criarUsuarioAoRegistrar = functions.auth.user().onCreate(
+  async (user) => {
+    await db.collection("Usuarios").doc(user.uid).set({
+      uid: user.uid,
+      email: user.email || null,
+      nome: user.displayName || "Usuário",
+      tipo: "user",
       criadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    count++;
-    if (count === LIMITE_BATCH) {
-      await batch.commit();
-      batch = db.batch();
-      count = 0;
-    }
+    // 🔥 Atualiza StatusGlobal
+    const ref = db.collection("StatusGlobal").doc("geral");
+    await ref.set(
+      {
+        usuarios: admin.firestore.FieldValue.increment(1),
+        atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
   }
-
-  if (count > 0) await batch.commit();
-  await rodadaRef.set({ numero: rodada }, { merge: true });
-
-  return {
-    success: true,
-    criadas: TOTAL_CARTELAS,
-    total: TOTAL_CARTELAS,
-    rodada
-  };
-});
+);
 
 /* ===============================
-   🧠 ENTRAR NA FILA / RESERVAR
+   📊 CRIAR CARTELAS AUTOMATICO
 ================================ */
-exports.reservarCartela = functions.https.onCall(async (data, context) => {
-  if (!context.auth)
-    throw new functions.https.HttpsError("unauthenticated");
+exports.criarCartelasAutomatico = functions.https.onCall(
+  async (_, context) => {
+    if (!context.auth || context.auth.uid !== SUPER_ADMIN_UID) {
+      throw new functions.https.HttpsError("permission-denied", "Acesso negado");
+    }
 
-  const uid = context.auth.uid;
-  const { cartelaId } = data;
+    const statusRef = db.collection("StatusSorteio").doc("geral");
+    const statusSnap = await statusRef.get();
+    const rodadaAtual = statusSnap.exists ? statusSnap.data().rodada || 1 : 1;
 
-  if (!cartelaId)
-    throw new functions.https.HttpsError("invalid-argument");
+    const cartelasRef = db.collection("Cartelas");
+    const existentes = await cartelasRef.get();
 
-  const ref = db.collection("Cartelas").doc(cartelaId);
+    if (existentes.size >= TOTAL_CARTELAS)
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Limite de cartelas atingido"
+      );
+
+    let batch = db.batch();
+    let count = 0;
+
+    for (let i = existentes.size + 1; i <= TOTAL_CARTELAS; i++) {
+      const id = `C${i.toString().padStart(4, "0")}`;
+      const numeros = [];
+
+      while (numeros.length < NUMEROS_POR_CARTELA) {
+        const n = Math.floor(Math.random() * 60) + 1;
+        if (!numeros.includes(n)) numeros.push(n);
+      }
+
+      batch.set(cartelasRef.doc(id), {
+        codigo: i,
+        numeros,
+        rodada: rodadaAtual,
+        status: "disponivel",
+        reservadaPor: null,
+        reservaExpiraEm: null,
+        nomeComprador: " ",
+        criadaEm: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      count++;
+      if (count % LIMITE_BATCH === 0) {
+        await batch.commit();
+        batch = db.batch();
+      }
+    }
+
+    await batch.commit();
+    return { success: true, rodada: rodadaAtual };
+  }
+);
+
+/* ===============================
+   🔹 ATUALIZA STATUS DO SORTEIO
+================================ */
+async function atualizarStatusSorteio(qtd) {
+  const ref = db.collection("StatusSorteio").doc("geral");
 
   await db.runTransaction(async tx => {
     const snap = await tx.get(ref);
-    if (!snap.exists)
-      throw new functions.https.HttpsError("not-found");
+    const atual = snap.exists ? snap.data() : {
+      rodada: 1,
+      cartelasVendidas: 0,
+      ultimaMetaProcessada: 0,
+    };
+
+    const cartelasVendidas = atual.cartelasVendidas + qtd;
+    let metaAtual = atual.metaAtual || METAS[0].cartelas;
+    let premioAtual = atual.premioAtual || METAS[0].premio;
+    let nivel = atual.nivel || METAS[0].nivel;
+    let sorteioLiberado = false;
+    let ultimaMeta = atual.ultimaMetaProcessada;
+
+    for (const meta of METAS) {
+      if (cartelasVendidas >= meta.cartelas && ultimaMeta < meta.cartelas) {
+        metaAtual = meta.cartelas;
+        premioAtual = meta.premio;
+        nivel = meta.nivel;
+        sorteioLiberado = true;
+        ultimaMeta = meta.cartelas;
+        break;
+      }
+    }
+
+    tx.set(ref, {
+      rodada: atual.rodada,
+      cartelasVendidas,
+      metaAtual,
+      premioAtual,
+      nivel,
+      sorteioLiberado,
+      ultimaMetaProcessada: ultimaMeta,
+      faltamCartelas: TOTAL_CARTELAS - cartelasVendidas,
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+}
+
+/* ===============================
+   🎟️ RESERVAR CARTELA
+================================ */
+exports.reservarCartela = functions.https.onCall(async ({ cartelaId }, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError("unauthenticated");
+  }
+
+  const ref = db.collection("Cartelas").doc(cartelaId);
+  const uid = context.auth.uid;
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new functions.https.HttpsError("not-found");
 
     const c = snap.data();
     const agora = Date.now();
 
-    if (c.status === "vendida")
-      throw new functions.https.HttpsError("failed-precondition", "Cartela vendida");
-
-    if (
-      c.status === "reservada" &&
-      c.reservadaPor !== uid &&
-      c.reservaExpiraEm.toMillis() > agora
-    ) {
-      throw new functions.https.HttpsError(
-        "failed-precondition",
-        "Cartela reservada por outro usuário"
-      );
-    }
-
-    if (c.status === "reservada" && c.reservaExpiraEm.toMillis() <= agora) {
-      tx.update(ref, {
-        status: "disponivel",
-        reservadaPor: null,
-        reservaExpiraEm: null,
-      });
+    if (c.status !== "disponivel") {
+      throw new functions.https.HttpsError("failed-precondition");
     }
 
     tx.update(ref, {
@@ -167,339 +212,338 @@ exports.reservarCartela = functions.https.onCall(async (data, context) => {
     });
   });
 
-  return { success: true, tempo: TEMPO_RESERVA_MS };
+  return { success: true };
 });
 
-exports.limparReservasExpiradas = functions.pubsub
-  .schedule("every 1 minutes")
-  .onRun(async () => {
-    const agora = admin.firestore.Timestamp.now();
+/* ===============================
+   ❌ CANCELAR RESERVA
+================================ */
+exports.cancelarReserva = functions.https.onCall(
+  async ({ cartelaId }, context) => {
+    if (!context.auth)
+      throw new functions.https.HttpsError('unauthenticated');
 
+    const uid = context.auth.uid;
+    const ref = db.collection('Cartelas').doc(cartelaId);
+
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return;
+
+      const c = snap.data();
+      if (c.status === 'reservada' && c.reservadaPor === uid) {
+        tx.update(ref, {
+          status: 'disponivel',
+          reservadaPor: null,
+          reservaExpiraEm: null,
+        });
+      }
+    });
+
+    return { success: true };
+  }
+);
+
+/* ===============================
+   🧹 LIMPAR RESERVAS
+================================ */
+exports.limparReservasExpiradas = functions.pubsub
+  .schedule('every 1 minutes')
+  .onRun(async () => {
     const snap = await db
-      .collection("Cartelas")
-      .where("status", "==", "reservada")
-      .where("reservaExpiraEm", "<=", agora)
+      .collection('Cartelas')
+      .where('status', '==', 'reservada')
+      .where(
+        'reservaExpiraEm',
+        '<=',
+        admin.firestore.Timestamp.now()
+      )
+      .limit(500)
       .get();
 
     const batch = db.batch();
-
-    snap.docs.forEach(doc => {
-      batch.update(doc.ref, {
-        status: "disponivel",
+    snap.docs.forEach(d => {
+      batch.update(d.ref, {
+        status: 'disponivel',
         reservadaPor: null,
         reservaExpiraEm: null,
       });
     });
 
     await batch.commit();
-    return null;
   });
 
 /* ===============================
-   ❌ CANCELAR RESERVA
+   💰 CONFIRMAR COMPRA
 ================================ */
-exports.cancelarReserva = functions.https.onCall(async (data, context) => {
-  if (!context.auth)
-    throw new functions.https.HttpsError("unauthenticated");
-
-  const uid = context.auth.uid;
-  const { cartelaId } = data;
-
-  if (!cartelaId)
-    throw new functions.https.HttpsError("invalid-argument");
-
-  const ref = db.collection("Cartelas").doc(cartelaId);
-
-  await db.runTransaction(async tx => {
-    const snap = await tx.get(ref);
-    if (!snap.exists)
-      throw new functions.https.HttpsError("not-found");
-
-    const c = snap.data();
-
-    if (c.status !== "reservada" || c.reservadaPor !== uid) {
+/* ===============================
+   💰 CONFIRMAR COMPRA (atualizado com dashboard)
+================================ */
+exports.confirmarCompra = functions.https.onCall(
+  async ({ cartelas }, context) => {
+    if (!context.auth) {
       throw new functions.https.HttpsError(
-        "failed-precondition",
-        "Reserva não pertence ao usuário"
+        'unauthenticated',
+        'Usuário não autenticado'
       );
     }
 
-    tx.update(ref, {
-      status: "disponivel",
-      reservadaPor: null,
-      reservaExpiraEm: null,
-    });
-  });
+    const uid = context.auth.uid;
+    const nomeComprador =
+      context.auth.token.name ||
+      context.auth.token.email?.split('@')[0] ||
+      'Usuário';
 
-  return { success: true };
-});
-/* ===============================
-   📊 ATUALIZAR STATUS DO SORTEIO
-================================ */
-async function atualizarStatusSorteio(qtdComprada, valorCartela) {
-  const statusRef = db.collection("StatusSorteio").doc("geral");
-  const rodadaRef = db.collection("Rodadas").doc("atual");
-
-  await db.runTransaction(async (tx) => {
-    const statusSnap = await tx.get(statusRef);
-    const rodadaSnap = await tx.get(rodadaRef);
-
-    const rodadaAtual = rodadaSnap.exists
-      ? rodadaSnap.data().numero
-      : 1;
-
-    const data = statusSnap.exists
-      ? statusSnap.data()
-      : {
-          cartelasVendidas: 0,
-          arrecadadoTotal: 0,
-          rodada: rodadaAtual,
-          nivel: "vermelho",
-          status: "aberto",
-        };
-
-    const cartelasVendidas =
-      (data.cartelasVendidas || 0) + qtdComprada;
-
-    const arrecadadoTotal =
-      (data.arrecadadoTotal || 0) + qtdComprada * valorCartela;
-
-    // 🎯 METAS
-    let metaAtual = 100;
-    let premioAtual = 100;
-    let nivel = "vermelho";
-    let status = "aberto";
-    let sorteioLiberado = false;
-
-    if (cartelasVendidas >= 1000) {
-      metaAtual = 1000;
-      premioAtual = 1000;
-      nivel = "dourado";
-      status = "fechado";
-      sorteioLiberado = true;
-    } else if (cartelasVendidas >= 500) {
-      metaAtual = 500;
-      premioAtual = 500;
-      nivel = "verde";
+    if (!Array.isArray(cartelas) || cartelas.length === 0) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'Cartelas inválidas'
+      );
     }
 
-    const faltamCartelas = Math.max(
-      metaAtual - cartelasVendidas,
-      0
-    );
+    const agora = admin.firestore.Timestamp.now();
+    const historicoRef = db
+      .collection('Usuarios')
+      .doc(uid)
+      .collection('HistoricoCartelas');
+
+    const CHUNK_SIZE = 500;
+    const cartelasCompradas = [];
+
+    const chunks = [];
+    for (let i = 0; i < cartelas.length; i += CHUNK_SIZE) {
+      chunks.push(cartelas.slice(i, i + CHUNK_SIZE));
+    }
+
+    const processarBatch = async (chunk) => {
+      const batch = db.batch();
+      const promessas = chunk.map(async (cartelaId) => {
+        const ref = db.collection('Cartelas').doc(cartelaId);
+        const snap = await ref.get();
+
+        if (!snap.exists) {
+          throw new functions.https.HttpsError(
+            'not-found',
+            `Cartela ${cartelaId} não existe`
+          );
+        }
+
+        const c = snap.data();
+
+        if (
+          c.status !== 'reservada' ||
+          c.reservadaPor !== uid ||
+          (c.reservaExpiraEm && c.reservaExpiraEm.toMillis() < Date.now())
+        ) {
+          throw new functions.https.HttpsError(
+            'failed-precondition',
+            `Cartela ${cartelaId} indisponível`
+          );
+        }
+
+        // Atualiza cartela
+        batch.update(ref, {
+          status: 'vendida',
+          vendidaPara: uid,
+          vendidaEm: agora,
+          nomeComprador,
+          reservadaPor: null,
+          reservaExpiraEm: null,
+        });
+
+        // Histórico do usuário
+        batch.set(historicoRef.doc(cartelaId), {
+          codigo: c.codigo,
+          numeros: c.numeros,
+          rodada: c.rodada,
+          valor: VALOR_CARTELA,
+          status: 'vendida',
+          compradaEm: agora,
+          userNome: nomeComprador,
+        });
+
+        cartelasCompradas.push({ id: cartelaId, valor: VALOR_CARTELA });
+      });
+
+      await Promise.all(promessas);
+      await batch.commit();
+    };
+
+    for (let i = 0; i < chunks.length; i += 5) {
+      const lote = chunks.slice(i, i + 5);
+      await Promise.all(lote.map((chunk) => processarBatch(chunk)));
+    }
+
+    if (cartelasCompradas.length === 0) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'Nenhuma cartela válida para comprar'
+      );
+    }
+
+    // 🔹 Atualiza ranking do usuário
+    await atualizarRankingUsuario(uid, cartelasCompradas);
+
+    // 🔹 Atualiza status do sorteio
+    await atualizarStatusSorteio(cartelasCompradas.length);
+
+    // 🔹 Atualiza dashboard global
+    await atualizarStatusGlobal({ novasVendas: cartelasCompradas.length });
+
+    return {
+      success: true,
+      totalCompradas: cartelasCompradas.length,
+      nomeComprador,
+    };
+  }
+);
+
+
+
+
+/* ===============================
+   🎯 ATUALIZA RANKING EM TEMPO REAL
+================================ */
+async function atualizarRankingUsuario(uid, cartelasCompradas) {
+  if (!uid || !Array.isArray(cartelasCompradas) || cartelasCompradas.length === 0) {
+    return;
+  }
+
+  const quantidade = cartelasCompradas.length;
+  const total = cartelasCompradas.reduce((sum, c) => sum + (c.valor || VALOR_CARTELA), 0);
+
+  const userSnap = await db.collection("Usuarios").doc(uid).get();
+  const nomeUsuario = userSnap.exists ? userSnap.data().nome || "Usuário" : "Usuário";
+
+  const rankingRef = db.collection("RankingCompradores").doc(uid);
+
+  await rankingRef.set(
+    {
+      userId: uid,
+      nome: nomeUsuario,
+      quantidade: admin.firestore.FieldValue.increment(quantidade),
+      total: admin.firestore.FieldValue.increment(total),
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  console.log(`Ranking atualizado para ${nomeUsuario}: +${quantidade} cartelas, R$ ${total.toFixed(2)}`);
+}
+
+/* ===============================
+   🌍 STATUS GLOBAL (DASHBOARD)
+================================ */
+async function atualizarStatusGlobal({ novasVendas = 0 }) {
+  const ref = db.collection("StatusGlobal").doc("geral");
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+
+    const atual = snap.exists
+      ? snap.data()
+      : {
+          totalCartelas: TOTAL_CARTELAS,
+          cartelasVendidas: 0,
+          faturamento: 0,
+          usuarios: 0,
+          cartelasReservadas: 0,
+        };
+
+    const cartelasVendidas = (atual.cartelasVendidas || 0) + novasVendas;
+    const faturamento = cartelasVendidas * VALOR_CARTELA;
 
     tx.set(
-      statusRef,
+      ref,
       {
-        rodada: rodadaAtual,
+        totalCartelas: TOTAL_CARTELAS,
         cartelasVendidas,
-        arrecadadoTotal,
-        valorCartela,
-        metaAtual,
-        premioAtual,
-        faltamCartelas,
-        nivel,               // 🔥 SEMPRE DEFINIDO
-        status,              // 🔥 EVITA undefined
-        sorteioLiberado,
+        faturamento,
+        usuarios: atual.usuarios,
+        cartelasReservadas: atual.cartelasReservadas || 0,
         atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
   });
 }
+
 /* ===============================
-   💰 CONFIRMAR COMPRA
+   🌍 criarCheckout
 ================================ */
-exports.confirmarCompra = functions.https.onCall(async (data, context) => {
-  if (!context.auth)
-    throw new functions.https.HttpsError("unauthenticated");
+exports.criarCheckout = functions.https.onCall(
+  async ({ cartelas }, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated');
+    }
 
-  const uid = context.auth.uid;
-  const { cartelas } = data;
+    const uid = context.auth.uid;
 
-  if (!Array.isArray(cartelas) || cartelas.length === 0)
-    throw new functions.https.HttpsError("invalid-argument");
+    const pedidoRef = await db.collection('Pedidos').add({
+      uid,
+      cartelas,
+      status: 'pendente',
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
 
-  // 🔍 Buscar usuário
-  const userSnap = await db.collection("Usuarios").doc(uid).get();
-  const nomeComprador = userSnap.exists
-    ? userSnap.data().nome || "Usuário"
-    : "Usuário";
+    return {
+      pedidoId: pedidoRef.id,
+    };
+  }
+);
 
-  const batch = db.batch();
-  const agora = admin.firestore.FieldValue.serverTimestamp();
-
-  // 🔢 VALOR DA CARTELA (ajuste se mudar no futuro)
-  const VALOR_CARTELA = 2.5;
-  const quantidade = cartelas.length;
-  const totalCompra = quantidade * VALOR_CARTELA;
-
-  // 🎟️ Atualizar cartelas
-  for (const id of cartelas) {
-    const ref = db.collection("Cartelas").doc(id);
-    const snap = await ref.get();
-
-    if (!snap.exists)
-      throw new functions.https.HttpsError("not-found");
-
-    const c = snap.data();
-
-    if (
-      c.status !== "reservada" ||
-      c.reservadaPor !== uid ||
-      c.reservaExpiraEm.toMillis() < Date.now()
-    ) {
+exports.confirmarPagamento = functions.https.onCall(
+  async ({ pedidoId }, context) => {
+    if (!context.auth?.token?.admin) {
       throw new functions.https.HttpsError(
-        "failed-precondition",
-        "Reserva inválida ou expirada"
+        'permission-denied',
+        'Apenas admin'
       );
     }
 
-    batch.update(ref, {
-      status: "vendida",
-      userId: uid,
-      nomeComprador,
-      vendidaEm: agora,
-      reservadaPor: null,
-      reservaExpiraEm: null,
+    const pedidoRef = db.collection('Pedidos').doc(pedidoId);
+    const pedidoSnap = await pedidoRef.get();
+
+    if (!pedidoSnap.exists) {
+      throw new functions.https.HttpsError('not-found');
+    }
+
+    const pedido = pedidoSnap.data();
+
+    if (pedido.status !== 'pendente') {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'Pedido já processado'
+      );
+    }
+
+    await exports.confirmarCompra(
+      { cartelas: pedido.cartelas },
+      context
+    );
+
+    await pedidoRef.update({
+      status: 'pago',
+      pagoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    return { success: true };
+  }
+);
+
+async function antiSpam(uid) {
+  const ref = db.collection('AntiSpam').doc(uid);
+  const snap = await ref.get();
+  const agora = Date.now();
+
+  if (snap.exists && snap.data().until > agora) {
+    throw new functions.https.HttpsError(
+      'resource-exhausted',
+      'Aguarde alguns segundos'
+    );
   }
 
-  // 🏆 ATUALIZAR RANKING
-  const rankingRef = db.collection("RankingCompradores").doc(uid);
-
-  batch.set(
-    rankingRef,
-    {
-      userId: uid,
-      nome: nomeComprador,
-      quantidade: admin.firestore.FieldValue.increment(quantidade),
-      total: admin.firestore.FieldValue.increment(totalCompra),
-      atualizadoEm: agora,
-    },
-    { merge: true }
-  );
-
-  await batch.commit();
-
-// 📊 ATUALIZA STATUS DO SORTEIO
-await atualizarStatusSorteio(quantidade, VALOR_CARTELA);
-
-return {
-  success: true,
-  quantidade,
-  total: totalCompra,
-};
-});
-/* ===============================
-   🔄 RESETAR RODADA
-================================ */
-async function resetarRodada() {
-  const rodadaRef = db.collection("Rodadas").doc("atual");
-  const statusRef = db.collection("StatusSorteio").doc("geral");
-
-  const rodadaSnap = await rodadaRef.get();
-  const novaRodada = rodadaSnap.exists
-    ? rodadaSnap.data().numero + 1
-    : 1;
-
-  // Atualiza rodada
-  await rodadaRef.set({ numero: novaRodada });
-
-  // Reseta status
-  await statusRef.set({
-    cartelasVendidas: 0,
-    arrecadadoTotal: 0,
-    valorCartela: 2.5,
-    metaAtual: 100,
-    premioAtual: 100,
-    faltamCartelas: 100,
-    sorteioLiberado: false,
-    nivel: "vermelho",
-    rodada: novaRodada,
-    atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+  await ref.set({
+    until: agora + 3000, // 3 segundos
   });
-
-  return novaRodada;
 }
-/* ===============================
-   🎰 EXECUTAR SORTEIO
-================================ */
-exports.executarSorteio = functions.https.onCall(async (_, context) => {
-  if (!context.auth || !context.auth.token.admin)
-    throw new functions.https.HttpsError("permission-denied");
-
-  const statusSnap = await db.collection("StatusSorteio").doc("geral").get();
-  if (!statusSnap.exists || !statusSnap.data().sorteioLiberado)
-    throw new functions.https.HttpsError("failed-precondition", "Sorteio não liberado");
-
-  const rodada = statusSnap.data().rodada;
-  const premio = statusSnap.data().premioAtual;
-
-  const cartelasSnap = await db
-    .collection("Cartelas")
-    .where("rodada", "==", rodada)
-    .where("status", "==", "vendida")
-    .get();
-
-  if (cartelasSnap.empty)
-    throw new functions.https.HttpsError("not-found", "Nenhuma cartela vendida");
-
-  const vencedora =
-    cartelasSnap.docs[Math.floor(Math.random() * cartelasSnap.docs.length)];
-
-  const c = vencedora.data();
-
-  await db.collection("Sorteios").doc(`rodada_${rodada}`).set({
-    rodada,
-    premio,
-    cartelaId: vencedora.id,
-    numeros: c.numeros,
-    userId: c.userId,
-    nome: c.nomeComprador,
-    criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  await resetarRodada();
-
-  return {
-    success: true,
-    ganhador: c.nomeComprador,
-    premio,
-    numeros: c.numeros,
-  };
-});
-exports.fecharRodadaAutomatico = functions.firestore
-  .document('Cartelas/{cartelaId}')
-  .onWrite(async () => {
-    const rodadaSnap = await db.collection('Rodadas').doc('atual').get();
-    if (!rodadaSnap.exists) return null;
-
-    const rodadaAtual = rodadaSnap.data().numero;
-
-    const snap = await db
-      .collection('Cartelas')
-      .where('rodada', '==', rodadaAtual)
-      .get();
-
-    const total = snap.size;
-    const vendidas = snap.docs.filter(
-      d => d.data().status === 'vendida'
-    ).length;
-
-    if (vendidas < total) return null;
-
-    // 🔒 FECHA RODADA
-    await db.collection('StatusSorteio').doc('geral').set({
-      rodada: rodadaAtual,
-      status: 'fechado',
-      fechadoEm: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    // ➕ CRIA NOVA RODADA
-    await db.collection('Rodadas').doc('atual').update({
-      numero: rodadaAtual + 1,
-    });
-
-    return null;
-  });

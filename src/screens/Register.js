@@ -24,23 +24,22 @@ export default function Register({ navigation }) {
     try {
       setLoading(true);
 
-      const cred = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        senha
-      );
+      const cred = await createUserWithEmailAndPassword(auth, email, senha);
 
-      // 🔥 CRIA USUÁRIO NO FIRESTORE (OBRIGATÓRIO)
+      // 🔥 Cria usuário no Firestore
       await setDoc(doc(db, 'Usuarios', cred.user.uid), {
         uid: cred.user.uid,
         nome,
         email,
-        tipo: 'user', // 🔐 SEMPRE user
+        tipo: 'user',
         criadoEm: serverTimestamp(),
       });
 
       Alert.alert('✅ Sucesso', 'Conta criada com sucesso');
-      navigation.replace('Login');
+
+      // 🔹 Vai para Login
+      navigation.navigate('Login');
+
     } catch (e) {
       console.log('Erro cadastro:', e);
       Alert.alert('Erro', e.message);

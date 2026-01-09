@@ -11,6 +11,7 @@ import AdminPromocaoHome from '../screens/AdminPromocaoHome';
 import HistoricoSorteios from '../screens/HistoricoSorteios';
 import StatusSorteio from '../screens/StatusSorteio';
 import AdminDashboardRodada from '../screens/AdminDashboardRodada';
+import DashboardFinanceiroMensal from '../screens/DashboardFinanceiroMensal';
 
 export default function AdminRoutes() {
   return (
@@ -24,10 +25,8 @@ export default function AdminRoutes() {
 <Stack.Screen name="RankingCompradores" component={RankingCompradores} options={{ title: 'Ranking de Compradores' }} />  
 <Stack.Screen name="StatusSorteio" component={StatusSorteio} options={{ title: 'StatusSorteio' }} />
 <Stack.Screen name="AdminDashboardRodada" component={AdminDashboardRodada} options={{ title: 'AdminDashboardRodada' }} />
- <Stack.Screen
-  name="HistoricoSorteios"
-  component={HistoricoSorteios}
-/>
+ <Stack.Screen name="DashboardFinanceiroMensal" component={DashboardFinanceiroMensal} options={{ title: 'DashboardFinanceiroMensal' }} />
+ <Stack.Screen name="HistoricoSorteios" component={HistoricoSorteios}/>
  <Stack.Screen name="AdminPromocaoHome" component={AdminPromocaoHome} />
   </Stack.Navigator>
   );

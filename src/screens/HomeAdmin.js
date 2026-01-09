@@ -10,7 +10,7 @@ export default function HomeAdmin({ navigation }) {
     if (!loading && !isAdmin) {
       navigation.reset({
         index: 0,
-        routes: [{ name: 'Home' }], // ou Login, se preferir
+        routes: [{ name: 'Home' }],
       });
     }
   }, [loading, isAdmin]);
@@ -34,10 +34,8 @@ export default function HomeAdmin({ navigation }) {
     );
   }
 
-  // ❌ NÃO ADMIN — NÃO RENDERIZA NADA
-  if (!isAdmin) {
-    return null;
-  }
+  // ❌ NÃO ADMIN
+  if (!isAdmin) return null;
 
   // ✅ ADMIN CONFIRMADO
   return (
@@ -89,20 +87,41 @@ export default function HomeAdmin({ navigation }) {
             Banner, prêmio, contador e CTA
           </Text>
         </Pressable>
-<Pressable
-  onPress={() => navigation.navigate('AdminDashboardRodada')}
-  style={{
-    backgroundColor: '#64748b',
-    padding: 22,
-    borderRadius: 16,
-    marginBottom: 16,
-  }}
->
-  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-    🎯 Dashboard por Rodada
-  </Text>
-</Pressable>
-        {/* 📊 Dashboard */}
+
+        {/* 🎯 Dashboard por Rodada */}
+        <Pressable
+          onPress={() => navigation.navigate('AdminDashboardRodada')}
+          style={{
+            backgroundColor: '#64748b',
+            padding: 22,
+            borderRadius: 16,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+            🎯 Dashboard por Rodada
+          </Text>
+        </Pressable>
+
+        {/* 💰 NOVO — Dashboard Financeiro Mensal */}
+        <Pressable
+          onPress={() => navigation.navigate('DashboardFinanceiroMensal')}
+          style={{
+            backgroundColor: '#22c55e',
+            padding: 22,
+            borderRadius: 16,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ color: '#022c22', fontSize: 18, fontWeight: 'bold' }}>
+            💰 Dashboard Financeiro Mensal
+          </Text>
+          <Text style={{ color: '#064e3b', marginTop: 4 }}>
+            Entradas, saídas, lucro e Pix
+          </Text>
+        </Pressable>
+
+        {/* 📊 Dashboard Geral */}
         <Pressable
           onPress={() => navigation.navigate('AdminDashboard')}
           style={{
@@ -113,13 +132,14 @@ export default function HomeAdmin({ navigation }) {
           }}
         >
           <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-            Dashboard
+            Dashboard Geral
           </Text>
           <Text style={{ color: '#e0f2fe', marginTop: 4 }}>
             Métricas e desempenho
           </Text>
         </Pressable>
-		{/* 🔥 Historico Sorteios */}
+
+        {/* 🏆 Histórico Sorteios */}
         <Pressable
           onPress={() => navigation.navigate('HistoricoSorteios')}
           style={{
@@ -134,7 +154,7 @@ export default function HomeAdmin({ navigation }) {
           </Text>
         </Pressable>
 
-        {/* 👥 status de Sorteios */}
+        {/* 📡 Status Sorteios */}
         <Pressable
           onPress={() => navigation.navigate('StatusSorteio')}
           style={{
@@ -148,7 +168,7 @@ export default function HomeAdmin({ navigation }) {
             Status de Sorteios
           </Text>
           <Text style={{ color: '#dcfce7', marginTop: 4 }}>
-            Visualizar e gerenciar usuários
+            Acompanhamento em tempo real
           </Text>
         </Pressable>
 

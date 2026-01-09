@@ -3,7 +3,7 @@ import { useContext, useEffect, useRef, useState } from 'react';
 import { AuthContext } from '../contexts/AuthContext';
 import * as Notifications from 'expo-notifications';
 import { db } from '../services/firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { useNavigation } from '@react-navigation/native';
 import PromoBanner from '../components/PromoBanner';
 import ConfettiCannon from 'react-native-confetti-cannon';
@@ -17,7 +17,7 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Metas de prêmio (em cartelas vendidas)
+// Metas
 const META_PREMIO_100 = 100;
 const META_PREMIO_500 = 500;
 const META_PREMIO_1000 = 1000;
@@ -41,54 +41,61 @@ export default function HomeUser() {
 
   const [barraLayout, setBarraLayout] = useState({ y: 0, height: 0 });
 
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  const brilhoAnim = useRef(new Animated.Value(0)).current;
   const telaAltura = Dimensions.get('window').height;
 
-  // Confetes por nível
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  const brilhoAnim = useRef(new Animated.Value(0)).current;
+  const premioAnim = useRef(new Animated.Value(0)).current;
+  const premioPulse = useRef(new Animated.Value(1)).current;
+  const ultimaMetaRef = useRef(0);
+
   const [showConfete100, setShowConfete100] = useState(false);
   const [showConfete500, setShowConfete500] = useState(false);
   const [showConfete1000, setShowConfete1000] = useState(false);
+const [saldoDisponivel, setSaldoDisponivel] = useState(0);
+const [premioGanho, setPremioGanho] = useState(0);
+  /* 🔐 Gera código seguro */
+  function gerarCodigo(uid) {
+    if (!uid || typeof uid !== 'string') return '';
+    return uid.substring(0, 6).toUpperCase();
+  }
 
-const premioAnim = useRef(new Animated.Value(0)).current;
-const premioPulse = useRef(new Animated.Value(1)).current;
+  /* 🔥 Status do sorteio (tempo real, independente do usuário) */
+  useEffect(() => {
+    const ref = doc(db, 'StatusSorteio', 'geral');
 
-    // Atualiza progresso, próximo nível e faltam cartelas
+    const unsub = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) return;
+      setCartelasVendidas(snap.data()?.cartelasVendidas ?? 0);
+    });
+
+    return unsub;
+  }, []);
+
+  /* 🎯 Cálculo de progresso */
   useEffect(() => {
     let progresso = 100;
     let proximo = null;
     let faltam = 0;
-    let metaAtual = 0;
 
     if (cartelasVendidas < META_PREMIO_100) {
       progresso = (cartelasVendidas / META_PREMIO_100) * 100;
       proximo = 'R$100';
       faltam = META_PREMIO_100 - cartelasVendidas;
-      metaAtual = 0;
-    } 
-    else if (cartelasVendidas < META_PREMIO_500) {
+    } else if (cartelasVendidas < META_PREMIO_500) {
       progresso =
         ((cartelasVendidas - META_PREMIO_100) /
           (META_PREMIO_500 - META_PREMIO_100)) *
         100;
       proximo = 'R$500';
       faltam = META_PREMIO_500 - cartelasVendidas;
-      metaAtual = META_PREMIO_100;
-    } 
-    else if (cartelasVendidas < META_PREMIO_1000) {
+    } else if (cartelasVendidas < META_PREMIO_1000) {
       progresso =
         ((cartelasVendidas - META_PREMIO_500) /
           (META_PREMIO_1000 - META_PREMIO_500)) *
         100;
       proximo = 'R$1000';
       faltam = META_PREMIO_1000 - cartelasVendidas;
-      metaAtual = META_PREMIO_500;
-    } 
-    else {
-      progresso = 100;
-      proximo = null;
-      faltam = 0;
-      metaAtual = META_PREMIO_1000;
     }
 
     setProgressoPercentual(Math.min(100, Math.floor(progresso)));
@@ -96,7 +103,6 @@ const premioPulse = useRef(new Animated.Value(1)).current;
     setFaltamCartelas(faltam);
     setSorteioLiberado(faltam === 0);
 
-    // Define nível visual
     const nivel =
       cartelasVendidas >= META_PREMIO_1000
         ? 'dourado'
@@ -106,159 +112,202 @@ const premioPulse = useRef(new Animated.Value(1)).current;
 
     setNivelAtual(nivel);
 
-    /* 🎉 CONFETES — DISPARA SÓ UMA VEZ POR META */
     if (cartelasVendidas >= META_PREMIO_100 && ultimaMetaRef.current < META_PREMIO_100) {
       setShowConfete100(true);
       ultimaMetaRef.current = META_PREMIO_100;
     }
-
     if (cartelasVendidas >= META_PREMIO_500 && ultimaMetaRef.current < META_PREMIO_500) {
       setShowConfete500(true);
       ultimaMetaRef.current = META_PREMIO_500;
     }
-
     if (cartelasVendidas >= META_PREMIO_1000 && ultimaMetaRef.current < META_PREMIO_1000) {
       setShowConfete1000(true);
       ultimaMetaRef.current = META_PREMIO_1000;
     }
   }, [cartelasVendidas]);
 
-useEffect(() => {
-  if (!sorteioLiberado) return;
+  /* 🎰 Animação prêmio */
+  useEffect(() => {
+    if (!sorteioLiberado) return;
 
-  // Entrada estilo jackpot
-  Animated.sequence([
+    premioAnim.setValue(0);
+    premioPulse.setValue(1);
+
     Animated.timing(premioAnim, {
       toValue: 1,
       duration: 600,
       useNativeDriver: true,
-    }),
-  ]).start();
+    }).start();
 
-  // Pulsação infinita (cassino)
-  Animated.loop(
-    Animated.sequence([
-      Animated.timing(premioPulse, {
-        toValue: 1.1,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-      Animated.timing(premioPulse, {
-        toValue: 1,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-    ])
-  ).start();
-}, [sorteioLiberado]);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(premioPulse, { toValue: 1.1, duration: 700, useNativeDriver: true }),
+        Animated.timing(premioPulse, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ])
+    );
 
-  /* 🔐 GERA CÓDIGO ÚNICO */
-  function gerarCodigo(uid) {
-    return uid.substring(0, 6).toUpperCase();
-  }
+    loop.start();
+    return () => loop.stop();
+  }, [sorteioLiberado]);
 
-  /* 🔹 Carrega código de indicação */
+  /* 📈 Barra de progresso */
   useEffect(() => {
-    if (!user?.uid) return;
-
-    const ref = doc(db, 'Indicacoes', user.uid);
-    const unsubIndicacao = onSnapshot(ref, async (snap) => {
-      if (!snap.exists()) {
-        const codigo = gerarCodigo(user.uid);
-        await setDoc(ref, { userId: user.uid, codigo, saldo: 0, totalIndicados: 0 });
-        setCodigoIndicacao(codigo);
-        setSaldoIndicacoes(0);
-      } else {
-        const data = snap.data();
-        setCodigoIndicacao(data.codigo);
-        setSaldoIndicacoes(data.saldo || 0);
-      }
-    });
-
-    return () => unsubIndicacao();
-  }, [user?.uid]);
-
-  /* 📤 Compartilhar código */
-  async function compartilharCodigo() {
-    try {
-      await Share.share({
-        message: `🎟️ Ganhe dinheiro com a Rifa Digital!\n\nUse meu código: ${codigoIndicacao}\nCadastre-se, compre sua rifa e concorra!\n\n👉 https://seudominio.com/cadastro?ref=${codigoIndicacao}`,
-      });
-    } catch (error) {
-      console.log(error);
-    }
-  }
-
-  /* 🔥 CARREGA STATUS DO SORTEIO */
-  useEffect(() => {
-    if (!user?.uid) return;
-
-    const ref = doc(db, 'StatusSorteio', 'geral');
-
-    const unsub = onSnapshot(ref, (snap) => {
-      if (!snap.exists()) return;
-      const data = snap.data() || {};
-      setCartelasVendidas(data.cartelasVendidas ?? 0);
-    });
-
-    return unsub;
-  }, [user?.uid]);
-
-  /* 🔹 ANIMAÇÃO DA BARRA DE PRÊMIOS */
-  useEffect(() => {
-    const perc = progressoPercentual / 100;
-
     Animated.timing(progressAnim, {
-      toValue: Math.min(perc, 1),
+      toValue: progressoPercentual / 100,
       duration: 500,
       useNativeDriver: false,
     }).start();
   }, [progressoPercentual]);
 
-  /* Brilho animado */
+  /* ✨ Brilho */
   const alertaFinal = !sorteioLiberado && faltamCartelas <= 10;
   useEffect(() => {
-    Animated.loop(
+    if (!alertaFinal) return;
+
+    const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(brilhoAnim, { toValue: 1, duration: alertaFinal ? 400 : 1200, useNativeDriver: false }),
-        Animated.timing(brilhoAnim, { toValue: 0, duration: alertaFinal ? 400 : 1200, useNativeDriver: false }),
+        Animated.timing(brilhoAnim, { toValue: 1, duration: 400, useNativeDriver: false }),
+        Animated.timing(brilhoAnim, { toValue: 0, duration: 400, useNativeDriver: false }),
       ])
-    ).start();
+    );
+
+    anim.start();
+    return () => anim.stop();
   }, [alertaFinal]);
 
-  /* MODAL CLICK BARRA */
-  const onBarPress = (event) => {
-    if (!barraLayout.height) return;
-    const touchY = event.nativeEvent.pageY;
-    const relativeY = touchY - barraLayout.y;
-    const yInvertido = barraLayout.height - relativeY;
-    let texto = '';
+  /* 🔹 Código de indicação */
+  useEffect(() => {
+    if (!user?.uid) return;
 
-    const alturaTotal = telaAltura / 2;
-    const alturaVermelha = (META_PREMIO_100 / META_PREMIO_1000) * alturaTotal;
-    const alturaVerde = ((META_PREMIO_500 - META_PREMIO_100) / META_PREMIO_1000) * alturaTotal;
+    const ref = doc(db, 'Indicacoes', user.uid);
 
-    if (yInvertido <= alturaVermelha) texto = `🔴 Prêmio R$100`;
-    else if (yInvertido <= alturaVermelha + alturaVerde) texto = `🟢 Prêmio R$500`;
-    else texto = `🟡 Prêmio R$1000`;
+    const init = async () => {
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        await setDoc(ref, {
+          userId: user.uid,
+          codigo: gerarCodigo(user.uid),
+          saldo: 0,
+          totalIndicados: 0,
+        });
+      }
+    };
 
-    setModalTexto(texto);
-    setModalVisible(true);
-  };
+    init();
+
+    const unsub = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) return;
+      setCodigoIndicacao(snap.data().codigo);
+      setSaldoIndicacoes(snap.data().saldo || 0);
+    });
+
+    return unsub;
+  }, [user?.uid]);
+  
+useEffect(() => {
+  if (!user?.uid) return;
+
+  const ref = doc(db, 'Carteiras', user.uid);
+
+  const unsub = onSnapshot(ref, (snap) => {
+    if (!snap.exists()) return;
+
+    setSaldoDisponivel(snap.data()?.saldo || 0);
+    setPremioGanho(snap.data()?.premio || 0);
+  });
+
+  return unsub;
+}, [user?.uid]);
+  /* 📤 Compartilhar */
+  async function compartilharCodigo() {
+    await Share.share({
+      message: `🎟️ Use meu código: ${codigoIndicacao}\n👉 https://seudominio.com/cadastro?ref=${codigoIndicacao}`,
+    });
+  }
 
   const abrirInbox = () => navigation.navigate('InboxNotificacoes');
+  /* 🟦 Clique na barra lateral de prêmios */
+  const onBarPress = () => {
+    if (sorteioLiberado) {
+      setModalTexto('🎉 Sorteio liberado!\nBoa sorte 🍀');
+    } else {
+      setModalTexto(
+        `📊 Progresso atual\n\n` +
+        `🎟️ Vendidas: ${cartelasVendidas}\n` +
+        `⏳ Faltam: ${faltamCartelas}\n\n` +
+        `🎯 Próximo prêmio: ${proximoNivel || '---'}`
+      );
+    }
+    setModalVisible(true);
+  };
 
   return (
     <View style={{ flex: 1, flexDirection: 'row', backgroundColor: '#0f172a' }}>
       <ScrollView style={{ flex: 1 }}>
         <View style={{ padding: 20 }}>
-          {/* HEADER */}
+         
+		 {/* HEADER */}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <Pressable onPress={() => navigation.openDrawer()}><Text style={{ color: '#fff', fontSize: 26 }}>☰</Text></Pressable>
             <Text style={{ fontSize: 16, color: '#cbd5f5' }}>Olá, {profile?.nome || user?.displayName || 'Usuário'}</Text>
             <Pressable onPress={abrirInbox}><Text style={{ fontSize: 26, color: '#fff' }}>🔔</Text></Pressable>
           </View>
+<View
+  style={{
+    backgroundColor: '#020617',
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#334155',
+  }}
+>
+  <Text style={{ color: '#cbd5f5', fontSize: 14 }}>
+    👤 {profile?.nome || user?.displayName || 'Usuário'}
+  </Text>
 
+  <Text
+    style={{
+      color: '#22c55e',
+      fontSize: 20,
+      fontWeight: 'bold',
+      marginTop: 6,
+    }}
+  >
+    💰 Saldo: R$ {saldoDisponivel.toFixed(2)}
+  </Text>
+
+  {premioGanho > 0 && (
+    <Text
+      style={{
+        color: '#facc15',
+        fontSize: 16,
+        fontWeight: 'bold',
+        marginTop: 4,
+      }}
+    >
+      🏆 Prêmio ganho: R$ {premioGanho.toFixed(2)}
+    </Text>
+  )}
+
+  {(saldoDisponivel > 0 || premioGanho > 0) && (
+    <Pressable
+      onPress={() => navigation.navigate('Saque')}
+      style={{
+        alignSelf: 'flex-start',
+        marginTop: 10,
+        backgroundColor: '#16a34a',
+        paddingVertical: 6,
+        paddingHorizontal: 14,
+        borderRadius: 10,
+      }}
+    >
+      <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>
+        💸 Sacar
+      </Text>
+    </Pressable>
+  )}
+</View>
           {/* Promo Banner */}
           <PromoBanner nivelAtual={nivelAtual} onPress={() => navigation.navigate('EscolherCartelas')} />
 

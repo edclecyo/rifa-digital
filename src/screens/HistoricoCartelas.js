@@ -1,3 +1,4 @@
+import React, { useEffect, useState, useContext } from 'react';
 import {
   View,
   Text,
@@ -5,88 +6,159 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from 'react-native';
-
-import { useEffect, useState, useContext } from 'react';
 import { AuthContext } from '../contexts/AuthContext';
 import { db } from '../services/firebase';
-
 import {
   collection,
+  onSnapshot,
   query,
   orderBy,
-  onSnapshot,
+  doc,
+  limit,
 } from 'firebase/firestore';
 
 export default function HistoricoCartelas() {
   const { user } = useContext(AuthContext);
-  const [lista, setLista] = useState([]);
+
+  const [cartelas, setCartelas] = useState([]);
+  const [statusSorteio, setStatusSorteio] = useState(null);
+  const [ranking, setRanking] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user?.uid) return;
 
-    const q = query(
+    // 🔹 Histórico Cartelas do usuário
+    const qCartelas = query(
       collection(db, 'Usuarios', user.uid, 'HistoricoCartelas'),
       orderBy('compradaEm', 'desc')
     );
 
-    const unsub = onSnapshot(q, snap => {
-      setLista(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    const unsubCartelas = onSnapshot(qCartelas, snap => {
+      setCartelas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       setLoading(false);
     });
 
-    return () => unsub();
+    // 🔹 Status geral do sorteio
+    const refStatus = doc(db, 'StatusSorteio', 'geral');
+    const unsubStatus = onSnapshot(refStatus, snap => {
+      if (snap.exists()) setStatusSorteio(snap.data());
+    });
+
+    // 🔹 Ranking top 5 compradores
+    const qRanking = query(
+      collection(db, 'RankingCompradores'),
+      orderBy('quantidade', 'desc'),
+      limit(5)
+    );
+    const unsubRanking = onSnapshot(qRanking, snap => {
+      setRanking(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => {
+      unsubCartelas();
+      unsubStatus();
+      unsubRanking();
+    };
   }, [user?.uid]);
+
+  const formatarData = timestamp => {
+    if (!timestamp?.toDate) return '—';
+    return timestamp.toDate().toLocaleString('pt-BR');
+  };
+
+  const corNivel = nivel => {
+    if (nivel === 'vermelho') return '#f87171';
+    if (nivel === 'verde') return '#34d399';
+    if (nivel === 'dourado') return '#facc15';
+    return '#d1d5db';
+  };
 
   if (loading) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color="#3b82f6" />
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>🎟️ Minhas Cartelas</Text>
-
-      <FlatList
-        data={lista}
-        keyExtractor={item => item.id}
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <Text style={styles.codigo}>#{item.codigo}</Text>
-            <Text>Rodada: {item.rodada}</Text>
-            <Text>Status: {item.status}</Text>
-            <Text>💰 R$ {item.valor.toFixed(2)}</Text>
-          </View>
-        )}
-        ListEmptyComponent={
-          <Text style={{ textAlign: 'center', marginTop: 20 }}>
-            Nenhuma cartela ainda
+      {/* 🏆 STATUS DO SORTEIO */}
+      {statusSorteio && (
+        <View style={styles.statusContainer}>
+          <Text style={styles.statusText}>
+            Nível atual:{' '}
+            <Text style={{ fontWeight: 'bold', color: corNivel(statusSorteio.nivel) }}>
+              {statusSorteio.nivel}
+            </Text>
           </Text>
-        }
-      />
+          <Text style={styles.statusText}>Cartelas vendidas: {statusSorteio.cartelasVendidas}</Text>
+          <Text style={styles.statusText}>Faltam: {statusSorteio.faltamCartelas}</Text>
+          <Text style={styles.statusText}>
+            Prêmio atual: R$ {Number(statusSorteio.premioAtual || 0).toFixed(2)}
+          </Text>
+        </View>
+      )}
+
+      {/* 🎟️ CARTELAS */}
+      <Text style={styles.sectionTitle}>Minhas Cartelas</Text>
+      {cartelas.length === 0 ? (
+        <Text style={styles.emptyText}>Você ainda não comprou nenhuma cartela</Text>
+      ) : (
+        <FlatList
+          data={cartelas}
+          keyExtractor={item => item.id}
+          renderItem={({ item }) => (
+            <View style={[styles.card, { borderColor: corNivel(statusSorteio?.nivel) }]}>
+              <Text style={styles.codigo}>🎟️ Cartela #{item.codigo || item.id}</Text>
+              <Text>Status: {item.status}</Text>
+              <Text>💰 R$ {Number(item.valor || 2.5).toFixed(2)}</Text>
+              <Text style={{ marginVertical: 4 }}>👤 Comprador: {item.userNome || 'Usuário'}</Text>
+              <Text>🕒 Comprada em: {formatarData(item.compradaEm)}</Text>
+            </View>
+          )}
+          initialNumToRender={10}
+          maxToRenderPerBatch={15}
+          windowSize={11}
+          removeClippedSubviews={true}
+        />
+      )}
+
+      {/* 🏆 RANKING */}
+      <Text style={styles.sectionTitle}>Top Compradores</Text>
+      {ranking.length === 0 ? (
+        <Text style={styles.emptyText}>Nenhum comprador ainda</Text>
+      ) : (
+        <FlatList
+          data={ranking}
+          keyExtractor={item => item.id}
+          renderItem={({ item, index }) => (
+            <View style={styles.rankingCard}>
+              <Text style={{ fontWeight: 'bold' }}>
+                {index + 1}º {item.nome || 'Usuário'}
+              </Text>
+              <Text>🎟️ {item.quantidade} cartelas</Text>
+              <Text>💰 R$ {Number(item.total || 0).toFixed(2)}</Text>
+            </View>
+          )}
+          initialNumToRender={5}
+          maxToRenderPerBatch={5}
+          windowSize={7}
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16, backgroundColor: '#fff' },
-  title: { fontSize: 22, fontWeight: 'bold', marginBottom: 16 },
-
-  card: {
-    padding: 14,
-    marginBottom: 10,
-    borderRadius: 12,
-    backgroundColor: '#f3f4f6',
-  },
-
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  statusContainer: { marginBottom: 16, padding: 12, borderRadius: 12, backgroundColor: '#e0f2fe' },
+  statusText: { fontSize: 16, marginBottom: 4, color: '#0c4a6e' },
+  sectionTitle: { fontSize: 20, fontWeight: 'bold', marginVertical: 12 },
+  card: { padding: 14, marginBottom: 10, borderRadius: 12, borderWidth: 2, backgroundColor: '#f3f4f6' },
   codigo: { fontWeight: 'bold', fontSize: 16 },
-
-  loading: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  emptyText: { textAlign: 'center', marginVertical: 10, color: '#6b7280' },
+  rankingCard: { padding: 12, marginBottom: 8, borderRadius: 10, backgroundColor: '#dbeafe' },
 });

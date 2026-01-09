@@ -1,5 +1,5 @@
 import { View, Text, FlatList } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useContext } from 'react';
 import { db } from '../services/firebase';
 import {
   collection,
@@ -7,13 +7,17 @@ import {
   orderBy,
   onSnapshot,
 } from 'firebase/firestore';
+import { AuthContext } from '../contexts/AuthContext';
 
-export default function AdminPagamentos() {
-  const [pagamentos, setPagamentos] = useState([]);
+export default function AdminComprasCartelas() {
+  const { isAdmin } = useContext(AuthContext);
+  const [compras, setCompras] = useState([]);
 
   useEffect(() => {
+    if (!isAdmin) return;
+
     const q = query(
-      collection(db, 'Pagamentos'),
+      collection(db, 'Compras'),
       orderBy('criadoEm', 'desc')
     );
 
@@ -24,21 +28,17 @@ export default function AdminPagamentos() {
           id: doc.id,
           ...doc.data(),
         }));
-        setPagamentos(lista);
+        setCompras(lista);
       },
       (error) => {
-        console.log('Erro ao carregar pagamentos:', error);
+        console.log('Erro ao carregar compras:', error.message);
       }
     );
 
     return unsubscribe;
-  }, []);
+  }, [isAdmin]);
 
-  function statusColor(status) {
-    if (status === 'pago') return '#16a34a';
-    if (status === 'pendente') return '#facc15';
-    return '#dc2626';
-  }
+  if (!isAdmin) return null;
 
   return (
     <View style={{ flex: 1, backgroundColor: '#0f172a', padding: 20 }}>
@@ -50,11 +50,11 @@ export default function AdminPagamentos() {
           marginBottom: 20,
         }}
       >
-        💳 Pagamentos
+        🧾 Compras de Cartelas
       </Text>
 
       <FlatList
-        data={pagamentos}
+        data={compras}
         keyExtractor={(item) => item.id}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={() => (
@@ -65,38 +65,34 @@ export default function AdminPagamentos() {
               marginTop: 40,
             }}
           >
-            Nenhum pagamento encontrado
+            Nenhuma compra registrada
           </Text>
         )}
         renderItem={({ item }) => (
           <View
             style={{
-              backgroundColor: '#1e293b',
+              backgroundColor: '#020617',
               padding: 16,
               borderRadius: 14,
               marginBottom: 12,
+              borderLeftWidth: 4,
+              borderLeftColor: '#22c55e',
             }}
           >
             <Text style={{ color: '#fff', fontWeight: 'bold' }}>
-              👤 {item.userNome || 'Usuário'}
+              👤 {item.userNome || item.uid}
             </Text>
 
             <Text style={{ color: '#cbd5f5', marginTop: 4 }}>
-              💰 R$ {Number(item.valor || 0).toFixed(2)}
+              🎟️ Cartela: {item.cartelaId}
             </Text>
 
             <Text style={{ color: '#cbd5f5' }}>
-              💳 {(item.tipo || 'desconhecido').toUpperCase()}
+              💰 R$ {Number(item.valor || 0).toFixed(2)}
             </Text>
 
-            <Text
-              style={{
-                marginTop: 6,
-                fontWeight: 'bold',
-                color: statusColor(item.status),
-              }}
-            >
-              {(item.status || 'indefinido').toUpperCase()}
+            <Text style={{ color: '#94a3b8', marginTop: 4, fontSize: 12 }}>
+              📅 {item.criadoEm?.toDate?.().toLocaleString() || '—'}
             </Text>
           </View>
         )}

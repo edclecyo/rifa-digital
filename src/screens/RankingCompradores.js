@@ -1,41 +1,56 @@
 import { View, Text, FlatList } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { db } from '../services/firebase';
-import {
-  collection,
-  onSnapshot,
-  query,
-  orderBy,
-} from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 
 export default function RankingCompradores() {
   const [ranking, setRanking] = useState([]);
+  const mounted = useRef(true);
 
   useEffect(() => {
-    // 🔥 Ranking agregado (Cloud Function)
-    // ⚠️ orderBy precisa de índice (quantidade desc, total desc)
+    mounted.current = true;
+
+    // 🔥 Busca ordenada por quantidade (segura, sem índice composto)
     const q = query(
       collection(db, 'RankingCompradores'),
-      orderBy('quantidade', 'desc'),
-      orderBy('total', 'desc')
+      orderBy('quantidade', 'desc')
     );
 
     const unsubscribe = onSnapshot(
       q,
-      (snap) => {
-        const lista = snap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
+      snap => {
+        if (!mounted.current) return;
+
+        let lista = snap.docs.map(docSnap => {
+          const d = docSnap.data() || {};
+
+          return {
+            id: docSnap.id,
+            nome: d.nome || 'Usuário',
+            quantidade: Number(d.quantidade) || 0,
+            total: Number(d.total) || 0,
+          };
+        });
+
+        // 🔥 Segundo critério de ordenação no JS
+        lista.sort((a, b) => {
+          if (b.quantidade !== a.quantidade) {
+            return b.quantidade - a.quantidade;
+          }
+          return b.total - a.total;
+        });
 
         setRanking(lista);
       },
-      (error) => {
+      error => {
         console.log('❌ Erro ao carregar ranking:', error);
       }
     );
 
-    return unsubscribe;
+    return () => {
+      mounted.current = false;
+      unsubscribe();
+    };
   }, []);
 
   function medalha(index) {
@@ -60,7 +75,7 @@ export default function RankingCompradores() {
 
       <FlatList
         data={ranking}
-        keyExtractor={(item) => item.id}
+        keyExtractor={item => item.id}
         ListEmptyComponent={() => (
           <Text
             style={{
@@ -92,11 +107,16 @@ export default function RankingCompradores() {
                   fontWeight: 'bold',
                 }}
               >
-                {medalha(index)} {item.nome || 'Usuário'}
+                {medalha(index)} {item.nome}
               </Text>
 
-              <Text style={{ color: '#cbd5f5', marginTop: 4 }}>
-                🎟️ {item.quantidade || 0} cartelas
+              <Text
+                style={{
+                  color: '#cbd5f5',
+                  marginTop: 4,
+                }}
+              >
+                🎟️ {item.quantidade} cartelas
               </Text>
             </View>
 
@@ -107,7 +127,7 @@ export default function RankingCompradores() {
                 fontWeight: 'bold',
               }}
             >
-              R$ {Number(item.total || 0).toFixed(2)}
+              R$ {item.total.toFixed(2)}
             </Text>
           </View>
         )}

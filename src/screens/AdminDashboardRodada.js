@@ -1,151 +1,209 @@
-import { View, Text, ScrollView, Dimensions } from 'react-native';
+import { View, Text, ScrollView } from 'react-native';
 import { useEffect, useState } from 'react';
 import { db } from '../services/firebase';
-import { collection, onSnapshot, doc } from 'firebase/firestore';
-import Svg, { Rect } from 'react-native-svg';
-
-const WIDTH = Dimensions.get('window').width - 40;
-const VALOR_CARTELA = 2.5;
+import {
+  doc,
+  collection,
+  onSnapshot,
+  query,
+  orderBy,
+  limit,
+  getDocs,
+} from 'firebase/firestore';
 
 export default function AdminDashboardRodada() {
-  const [rodadaAtual, setRodadaAtual] = useState(null);
-  const [stats, setStats] = useState({
-    total: 0,
-    vendidas: 0,
-    faturamento: 0,
-  });
+  const [status, setStatus] = useState(null);
+  const [rodadas, setRodadas] = useState([]);
+  const [alertas, setAlertas] = useState([]);
 
-  // 🔄 Rodada atual
+  /* ===============================
+     STATUS ATUAL
+  ================================ */
   useEffect(() => {
-    const unsubRodada = onSnapshot(
-      doc(db, 'Rodadas', 'atual'),
-      (snap) => {
-        if (snap.exists()) {
-          setRodadaAtual(snap.data().numero);
-        }
+    const unsub = onSnapshot(
+      doc(db, 'StatusSorteio', 'geral'),
+      async snap => {
+        if (!snap.exists()) return;
+
+        const data = snap.data();
+        setStatus(data);
+        validarInconsistencias(data);
       }
     );
 
-    return unsubRodada;
+    return unsub;
   }, []);
 
-  // 📊 Dados da rodada
+  /* ===============================
+     HISTÓRICO
+  ================================ */
   useEffect(() => {
-    if (!rodadaAtual) return;
+    const q = query(
+      collection(db, 'Rodadas'),
+      orderBy('rodada', 'desc'),
+      limit(10)
+    );
 
-    const unsubCartelas = onSnapshot(
-      collection(db, 'Cartelas'),
-      (snap) => {
-        const cartelas = snap.docs
-          .map(d => d.data())
-          .filter(c => c.rodada === rodadaAtual);
+    const unsub = onSnapshot(q, snap => {
+      setRodadas(
+        snap.docs.map(d => ({
+          id: d.id,
+          ...d.data(),
+        }))
+      );
+    });
 
-        const vendidas = cartelas.filter(
-          c => c.status === 'vendida'
-        );
+    return unsub;
+  }, []);
 
-        setStats({
-          total: cartelas.length,
-          vendidas: vendidas.length,
-          faturamento: vendidas.length * VALOR_CARTELA,
-        });
+  /* ===============================
+     🔍 VALIDAÇÃO ANTIFRAUDE
+  ================================ */
+  async function validarInconsistencias(status) {
+    const problemas = [];
+
+    // 1️⃣ Status fechado sem sorteio
+    if (status.status === 'fechado') {
+      const sorteioSnap = await getDocs(
+        query(collection(db, 'Sorteios'))
+      );
+
+      const existe = sorteioSnap.docs.some(
+        d => d.data().rodada === status.rodada
+      );
+
+      if (!existe) {
+        problemas.push('⚠️ Rodada fechada sem sorteio gerado');
       }
+    }
+
+    // 2️⃣ Cartelas inconsistentes
+    if (
+      status.sorteioLiberado &&
+      status.cartelasVendidas < status.metaAtual
+    ) {
+      problemas.push('⚠️ Sorteio liberado com cartelas insuficientes');
+    }
+
+    // 3️⃣ Prêmio inválido
+    if (!status.premioAtual || status.premioAtual <= 0) {
+      problemas.push('⚠️ Prêmio inválido');
+    }
+
+    // 4️⃣ Rodada sem registro
+    const rodadaSnap = await getDocs(
+      query(collection(db, 'Rodadas'))
     );
 
-    return unsubCartelas;
-  }, [rodadaAtual]);
-
-  const vendidasPct =
-    stats.total > 0 ? (stats.vendidas / stats.total) * WIDTH : 0;
-
-  const disponiveisPct = WIDTH - vendidasPct;
-
-  function Card({ title, value }) {
-    return (
-      <View
-        style={{
-          backgroundColor: '#1e293b',
-          padding: 20,
-          borderRadius: 14,
-          marginBottom: 16,
-        }}
-      >
-        <Text style={{ color: '#cbd5f5', fontSize: 14 }}>
-          {title}
-        </Text>
-        <Text style={{ color: '#fff', fontSize: 26, fontWeight: 'bold' }}>
-          {value}
-        </Text>
-      </View>
+    const rodadaExiste = rodadaSnap.docs.some(
+      d => d.data().rodada === status.rodada
     );
+
+    if (status.status === 'fechado' && !rodadaExiste) {
+      problemas.push('⚠️ Rodada fechada sem registro em Rodadas');
+    }
+
+    setAlertas(problemas);
   }
 
+  function nivelCor(nivel) {
+    if (nivel === 'vermelho') return '#dc2626';
+    if (nivel === 'verde') return '#16a34a';
+    if (nivel === 'dourado') return '#facc15';
+    return '#475569';
+  }
+
+  if (!status) return null;
+
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: '#0f172a', padding: 20 }}
-    >
-      <Text
-        style={{
-          fontSize: 26,
-          fontWeight: 'bold',
-          color: '#fff',
-          marginBottom: 20,
-        }}
-      >
-        🎯 Dashboard por Rodada
+    <ScrollView style={{ flex: 1, backgroundColor: '#0f172a', padding: 20 }}>
+      <Text style={{ fontSize: 26, fontWeight: 'bold', color: '#fff' }}>
+        🛡️ Dashboard Antifraude
       </Text>
 
-      <Card title="Rodada Atual" value={rodadaAtual ?? '—'} />
-      <Card title="Total de Cartelas" value={stats.total} />
-      <Card title="Cartelas Vendidas" value={stats.vendidas} />
-      <Card
-        title="Faturamento (R$)"
-        value={stats.faturamento.toFixed(2)}
-      />
-
-      {/* GRÁFICO */}
-      <Text
-        style={{
-          color: '#fff',
-          fontSize: 18,
-          fontWeight: 'bold',
-          marginVertical: 16,
-        }}
-      >
-        📈 Progresso da Rodada
-      </Text>
-
-      <Svg height="40" width={WIDTH}>
-        <Rect
-          x="0"
-          y="0"
-          width={vendidasPct}
-          height="40"
-          fill="#16a34a"
-        />
-        <Rect
-          x={vendidasPct}
-          y="0"
-          width={disponiveisPct}
-          height="40"
-          fill="#334155"
-        />
-      </Svg>
-
+      {/* STATUS ATUAL */}
       <View
         style={{
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          marginTop: 8,
+          backgroundColor: nivelCor(status.nivel),
+          padding: 18,
+          borderRadius: 16,
+          marginVertical: 20,
         }}
       >
-        <Text style={{ color: '#16a34a' }}>
-          Vendidas: {stats.vendidas}
+        <Text style={{ color: '#020617', fontWeight: 'bold', fontSize: 18 }}>
+          🎰 Rodada {status.rodada}
         </Text>
-        <Text style={{ color: '#cbd5f5' }}>
-          Disponíveis: {stats.total - stats.vendidas}
+
+        <Text style={{ color: '#020617', marginTop: 6 }}>
+          🎟️ {status.cartelasVendidas} / {status.metaAtual} cartelas
+        </Text>
+
+        <Text style={{ color: '#020617', marginTop: 6 }}>
+          💰 Prêmio: R$ {status.premioAtual?.toFixed(2)}
+        </Text>
+
+        <Text style={{ color: '#020617', marginTop: 6, fontWeight: 'bold' }}>
+          🔔 Status: {status.status?.toUpperCase()}
         </Text>
       </View>
+
+      {/* ALERTAS */}
+      {alertas.length > 0 && (
+        <View
+          style={{
+            backgroundColor: '#7f1d1d',
+            padding: 16,
+            borderRadius: 14,
+            marginBottom: 20,
+          }}
+        >
+          <Text style={{ color: '#fff', fontWeight: 'bold', marginBottom: 6 }}>
+            🚨 ALERTAS DE INCONSISTÊNCIA
+          </Text>
+
+          {alertas.map((a, i) => (
+            <Text key={i} style={{ color: '#fecaca', marginTop: 4 }}>
+              {a}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      {/* HISTÓRICO */}
+      <Text
+        style={{
+          color: '#fff',
+          fontSize: 20,
+          fontWeight: 'bold',
+          marginBottom: 12,
+        }}
+      >
+        📊 Últimas Rodadas
+      </Text>
+
+      {rodadas.map(r => (
+        <View
+          key={r.id}
+          style={{
+            backgroundColor: '#1e293b',
+            padding: 16,
+            borderRadius: 14,
+            marginBottom: 12,
+          }}
+        >
+          <Text style={{ color: '#fff', fontWeight: 'bold' }}>
+            🎰 Rodada {r.rodada}
+          </Text>
+
+          <Text style={{ color: '#cbd5f5', marginTop: 4 }}>
+            💰 Prêmio: R$ {r.premio?.toFixed(2)}
+          </Text>
+
+          <Text style={{ color: '#16a34a', marginTop: 6 }}>
+            FINALIZADA
+          </Text>
+        </View>
+      ))}
     </ScrollView>
   );
 }
