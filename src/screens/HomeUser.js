@@ -7,7 +7,7 @@ import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
 import { useNavigation } from '@react-navigation/native';
 import PromoBanner from '../components/PromoBanner';
 import ConfettiCannon from 'react-native-confetti-cannon';
-
+import { getFunctions, httpsCallable } from 'firebase/functions';
 /* 🔔 Config obrigatória */
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -25,6 +25,9 @@ const META_PREMIO_1000 = 1000;
 export default function HomeUser() {
   const { user, profile } = useContext(AuthContext);
   const navigation = useNavigation();
+
+const functions = getFunctions(undefined, 'southamerica-east1');
+const registrarLogin = httpsCallable(functions, 'registrarLogin');
 
   const [cartelasVendidas, setCartelasVendidas] = useState(0);
   const [faltamCartelas, setFaltamCartelas] = useState(0);
@@ -215,8 +218,18 @@ useEffect(() => {
     setSaldoDisponivel(snap.data()?.saldo || 0);
     setPremioGanho(snap.data()?.premio || 0);
   });
-
   return unsub;
+}, [user?.uid]);
+
+useEffect(() => {
+  if (!user?.uid) return;
+
+  registrarLogin({
+    origem: 'HomeUser',
+    plataforma: 'mobile',
+  }).catch((err) => {
+    console.log('❌ Erro registrarLogin:', err?.message || err);
+  });
 }, [user?.uid]);
   /* 📤 Compartilhar */
   async function compartilharCodigo() {

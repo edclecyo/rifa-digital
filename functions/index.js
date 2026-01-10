@@ -61,23 +61,253 @@ exports.criarUsuarioAoRegistrar = functions.auth.user().onCreate(
     await db.collection("Usuarios").doc(user.uid).set({
       uid: user.uid,
       email: user.email || null,
-      nome: user.displayName || "Usuário",
-      tipo: "user",
+
+      nome: "__PENDENTE__",
+      nomeConfirmado: false,
+
+      perfilCompleto: false,
+      statusConta: "PENDENTE",
+
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      confirmadoEm: null,
+    });
+  }
+);
+
+/* ===============================
+   👤 enfileirarValidacaoNome
+================================ */
+exports.enfileirarValidacaoNome = functions.firestore
+  .document("Usuarios/{uid}")
+  .onUpdate(async (change, context) => {
+    const antes = change.before.data();
+    const depois = change.after.data();
+
+    if (depois.nomeConfirmado) return null;
+    if (antes.nome === depois.nome) return null;
+    if (!depois.nome || depois.nome === "__PENDENTE__") return null;
+
+    // Envia para fila (Cloud Tasks)
+    await enqueueNomeTask(context.params.uid);
+
+    return null;
+  });
+exports.sincronizarNomeUsuario = functions.firestore
+  .document("Usuarios/{uid}")
+  .onWrite(async (change, context) => {
+    const { uid } = context.params;
+
+    // Documento removido
+    if (!change.after.exists) return null;
+
+    const antes = change.before.data();
+    const depois = change.after.data();
+
+    // 🔒 Já confirmado → nunca mais roda
+    if (depois.nomeConfirmado === true) return null;
+
+    // 🔁 Nome não mudou
+    if (antes?.nome === depois?.nome) return null;
+
+    // 🚫 Nome inválido
+    if (
+      !depois?.nome ||
+      typeof depois.nome !== "string" ||
+      depois.nome === "__PENDENTE__"
+    ) {
+      return null;
+    }
+
+    const nomeLimpo = depois.nome.trim();
+
+    if (nomeLimpo.length < 3) return null;
+
+    // 🔥 Atualiza Auth UMA ÚNICA VEZ
+    await admin.auth().updateUser(uid, {
+      displayName: nomeLimpo,
+    });
+
+    // 🔄 Atualiza Firestore UMA ÚNICA VEZ
+    await change.after.ref.update({
+      nome: nomeLimpo,
+      nomeConfirmado: true,
+      perfilCompleto: true,
+    });
+
+    return null;
+  });
+  /* ===============================
+   📊 workerValidarNome
+================================ */
+  exports.workerValidarNome = functions.https.onRequest(
+  async (req, res) => {
+    const { uid } = req.body;
+
+    const ref = db.collection("Usuarios").doc(uid);
+    const snap = await ref.get();
+
+    if (!snap.exists) return res.sendStatus(200);
+
+    const user = snap.data();
+
+    if (user.nomeConfirmado) return res.sendStatus(200);
+
+    const nomeLimpo = user.nome.trim();
+    if (nomeLimpo.length < 3) return res.sendStatus(200);
+
+    // 🔒 Atualiza AUTH (autoridade)
+    await admin.auth().updateUser(uid, {
+      displayName: nomeLimpo,
+    });
+
+    // 🔒 Confirma no banco
+    await ref.update({
+      nome: nomeLimpo,
+      nomeConfirmado: true,
+      perfilCompleto: true,
+      statusConta: "ATIVA",
+      confirmadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // 🧾 Auditoria
+    await db.collection("AuditoriaUsuarios").add({
+      uid,
+      acao: "CONFIRMOU_NOME",
+      nome: nomeLimpo,
       criadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // 🔥 Atualiza StatusGlobal
-    const ref = db.collection("StatusGlobal").doc("geral");
-    await ref.set(
+    res.sendStatus(200);
+  }
+);
+/* ===============================
+   📊 avaliarKyc
+================================ */
+exports.avaliarKyc = functions.firestore
+  .document("Usuarios/{uid}")
+  .onUpdate(async (change) => {
+    const antes = change.before.data();
+    const depois = change.after.data();
+
+    let novoNivel = 0;
+    if (depois.nomeConfirmado) novoNivel = 1;
+    if (depois.documentoValidado) novoNivel = 2;
+    if (depois.selfieValidada) novoNivel = 3;
+
+    if (novoNivel === antes.kycNivel) return null;
+
+    return change.after.ref.update({
+      kycNivel: novoNivel,
+      statusConta: novoNivel >= 1 ? "ATIVA" : "PENDENTE",
+    });
+  });
+  /* ===============================
+   📊 registrarMovimento
+================================ */
+  async function registrarMovimento({
+  uid,
+  tipo,
+  valor,
+  origem,
+  referenciaId,
+}) {
+  await db.collection("Ledger").add({
+    uid,
+    tipo,
+    valor,
+    origem,
+    referenciaId,
+    criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+ /* ===============================
+   📊 recalcularSaldo
+================================ */
+exports.recalcularSaldo = functions.firestore
+  .document("Ledger/{id}")
+  .onCreate(async (snap) => {
+    const { uid, tipo, valor } = snap.data();
+
+    const walletRef = db.collection("Wallets").doc(uid);
+
+    await walletRef.set(
       {
-        usuarios: admin.firestore.FieldValue.increment(1),
+        saldoAtual: admin.firestore.FieldValue.increment(
+          tipo === "CREDITO" ? valor : -valor
+        ),
         atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
-  }
-);
+  });
+  /* ===============================
+   📊 antifraudeBasica
+================================ */
+  exports.antifraudeBasica = functions.firestore
+  .document("Ledger/{id}")
+  .onCreate(async (snap) => {
+    const { uid, valor } = snap.data();
 
+    if (valor > 5000) {
+      await db.collection("Usuarios").doc(uid).update({
+        statusConta: "LIMITADA",
+        riscoScore: admin.firestore.FieldValue.increment(20),
+      });
+    }
+  });
+  /* ===============================
+   📊 salvarPushToken
+================================ */
+  exports.salvarPushToken = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated');
+  }
+
+  const { pushToken } = data;
+  if (!pushToken || typeof pushToken !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument');
+  }
+
+  await db.collection('UsuariosPrivado').doc(context.auth.uid).set(
+    {
+      pushToken,
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return { ok: true };
+});
+
+ /* ===============================
+   📊 enfileirarPush
+================================ */
+exports.enfileirarPush = functions.firestore
+  .document('PushQueue/{id}')
+  .onCreate(async (snap) => {
+    // Cloud Task criada aqui
+  });
+  
+  /* ===============================
+   📊 processarPush
+================================ */
+ exports.processarPush = functions.https.onRequest(async (req, res) => {
+  const { uid, titulo, corpo } = req.body;
+
+  const devices = await db
+    .collection('UsuariosDevices')
+    .doc(uid)
+    .collection('lista')
+    .where('ativo', '==', true)
+    .get();
+
+  for (const doc of devices.docs) {
+    // envia push individual
+  }
+
+  res.sendStatus(200);
+});
 /* ===============================
    📊 CRIAR CARTELAS AUTOMATICO
 ================================ */
@@ -276,129 +506,110 @@ exports.limparReservasExpiradas = functions.pubsub
 /* ===============================
    💰 CONFIRMAR COMPRA
 ================================ */
-/* ===============================
-   💰 CONFIRMAR COMPRA (atualizado com dashboard)
-================================ */
-exports.confirmarCompra = functions.https.onCall(
-  async ({ cartelas }, context) => {
-    if (!context.auth) {
-      throw new functions.https.HttpsError(
-        'unauthenticated',
-        'Usuário não autenticado'
-      );
-    }
 
-    const uid = context.auth.uid;
-    const nomeComprador =
-      context.auth.token.name ||
-      context.auth.token.email?.split('@')[0] ||
-      'Usuário';
+exports.confirmarCompra = functions.https.onCall(async ({ cartelas }, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated');
+  }
 
-    if (!Array.isArray(cartelas) || cartelas.length === 0) {
-      throw new functions.https.HttpsError(
-        'invalid-argument',
-        'Cartelas inválidas'
-      );
-    }
+  const uid = context.auth.uid;
+  const nomeComprador =
+    context.auth.token.name ||
+    context.auth.token.email?.split('@')[0] ||
+    'Usuário';
 
-    const agora = admin.firestore.Timestamp.now();
-    const historicoRef = db
-      .collection('Usuarios')
-      .doc(uid)
-      .collection('HistoricoCartelas');
+  if (!Array.isArray(cartelas) || cartelas.length === 0) {
+    throw new functions.https.HttpsError('invalid-argument');
+  }
 
-    const CHUNK_SIZE = 500;
-    const cartelasCompradas = [];
+  const cartelasCompradas = await processarCompra({
+    uid,
+    cartelas,
+    nomeComprador,
+  });
 
-    const chunks = [];
-    for (let i = 0; i < cartelas.length; i += CHUNK_SIZE) {
-      chunks.push(cartelas.slice(i, i + CHUNK_SIZE));
-    }
+  if (!cartelasCompradas.length) {
+    throw new functions.https.HttpsError('failed-precondition');
+  }
 
-    const processarBatch = async (chunk) => {
-      const batch = db.batch();
-      const promessas = chunk.map(async (cartelaId) => {
-        const ref = db.collection('Cartelas').doc(cartelaId);
-        const snap = await ref.get();
+  await atualizarRankingUsuario(uid, cartelasCompradas);
+  await atualizarStatusSorteio(cartelasCompradas.length);
+  await atualizarStatusGlobal({ novasVendas: cartelasCompradas.length });
 
-        if (!snap.exists) {
-          throw new functions.https.HttpsError(
-            'not-found',
-            `Cartela ${cartelaId} não existe`
-          );
-        }
+  return {
+    success: true,
+    totalCompradas: cartelasCompradas.length,
+    nomeComprador,
+  };
+});
 
-        const c = snap.data();
+async function processarCompra({ uid, cartelas, nomeComprador }) {
+  const agora = admin.firestore.Timestamp.now();
+  const historicoRef = db
+    .collection('Usuarios')
+    .doc(uid)
+    .collection('HistoricoCartelas');
 
-        if (
-          c.status !== 'reservada' ||
-          c.reservadaPor !== uid ||
-          (c.reservaExpiraEm && c.reservaExpiraEm.toMillis() < Date.now())
-        ) {
-          throw new functions.https.HttpsError(
-            'failed-precondition',
-            `Cartela ${cartelaId} indisponível`
-          );
-        }
+  const CHUNK_SIZE = 500;
+  const cartelasCompradas = [];
 
-        // Atualiza cartela
-        batch.update(ref, {
-          status: 'vendida',
-          vendidaPara: uid,
-          vendidaEm: agora,
-          nomeComprador,
-          reservadaPor: null,
-          reservaExpiraEm: null,
-        });
+  const chunks = [];
+  for (let i = 0; i < cartelas.length; i += CHUNK_SIZE) {
+    chunks.push(cartelas.slice(i, i + CHUNK_SIZE));
+  }
 
-        // Histórico do usuário
-        batch.set(historicoRef.doc(cartelaId), {
-          codigo: c.codigo,
-          numeros: c.numeros,
-          rodada: c.rodada,
-          valor: VALOR_CARTELA,
-          status: 'vendida',
-          compradaEm: agora,
-          userNome: nomeComprador,
-        });
+  const processarBatch = async (chunk) => {
+    const batch = db.batch();
 
-        cartelasCompradas.push({ id: cartelaId, valor: VALOR_CARTELA });
+    for (const cartelaId of chunk) {
+      const ref = db.collection('Cartelas').doc(cartelaId);
+      const snap = await ref.get();
+
+      if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found');
+      }
+
+      const c = snap.data();
+
+      if (
+        c.status !== 'reservada' ||
+        c.reservadaPor !== uid ||
+        (c.reservaExpiraEm && c.reservaExpiraEm.toMillis() < Date.now())
+      ) {
+        throw new functions.https.HttpsError('failed-precondition');
+      }
+
+      batch.update(ref, {
+        status: 'vendida',
+        vendidaPara: uid,
+        vendidaEm: agora,
+        nomeComprador,
+        reservadaPor: null,
+        reservaExpiraEm: null,
       });
 
-      await Promise.all(promessas);
-      await batch.commit();
-    };
+      batch.set(historicoRef.doc(cartelaId), {
+        codigo: c.codigo,
+        numeros: c.numeros,
+        rodada: c.rodada,
+        valor: VALOR_CARTELA,
+        status: 'vendida',
+        compradaEm: agora,
+        userNome: nomeComprador,
+      });
 
-    for (let i = 0; i < chunks.length; i += 5) {
-      const lote = chunks.slice(i, i + 5);
-      await Promise.all(lote.map((chunk) => processarBatch(chunk)));
+      cartelasCompradas.push({ id: cartelaId, valor: VALOR_CARTELA });
     }
 
-    if (cartelasCompradas.length === 0) {
-      throw new functions.https.HttpsError(
-        'not-found',
-        'Nenhuma cartela válida para comprar'
-      );
-    }
+    await batch.commit();
+  };
 
-    // 🔹 Atualiza ranking do usuário
-    await atualizarRankingUsuario(uid, cartelasCompradas);
-
-    // 🔹 Atualiza status do sorteio
-    await atualizarStatusSorteio(cartelasCompradas.length);
-
-    // 🔹 Atualiza dashboard global
-    await atualizarStatusGlobal({ novasVendas: cartelasCompradas.length });
-
-    return {
-      success: true,
-      totalCompradas: cartelasCompradas.length,
-      nomeComprador,
-    };
+  for (let i = 0; i < chunks.length; i += 5) {
+    await Promise.all(chunks.slice(i, i + 5).map(processarBatch));
   }
-);
 
-
+  return cartelasCompradas;
+}
 
 
 /* ===============================
@@ -491,59 +702,130 @@ exports.criarCheckout = functions.https.onCall(
     };
   }
 );
+/* ===============================
+   🌍 confirmarPagamento
+================================ */
+exports.confirmarPagamento = functions.https.onCall(async ({ pedidoId }, context) => {
+  if (!context.auth?.token?.admin) {
+    throw new functions.https.HttpsError('permission-denied');
+  }
 
-exports.confirmarPagamento = functions.https.onCall(
-  async ({ pedidoId }, context) => {
-    if (!context.auth?.token?.admin) {
+  const pedidoRef = db.collection('Pedidos').doc(pedidoId);
+  const pedidoSnap = await pedidoRef.get();
+
+  if (!pedidoSnap.exists) {
+    throw new functions.https.HttpsError('not-found');
+  }
+
+  const pedido = pedidoSnap.data();
+  if (pedido.status !== 'pendente') {
+    throw new functions.https.HttpsError('failed-precondition');
+  }
+
+  const nomeComprador = 'Pagamento Manual';
+
+  const cartelasCompradas = await processarCompra({
+    uid: pedido.uid,
+    cartelas: pedido.cartelas,
+    nomeComprador,
+  });
+
+  await pedidoRef.update({
+    status: 'pago',
+    pagoEm: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { success: true, total: cartelasCompradas.length };
+});
+/* ===============================
+   🌍 registrarDevice
+================================ */
+exports.registrarDevice = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated');
+  }
+
+  const uid = context.auth.uid;
+  const { deviceId, pushToken, platform } = data;
+
+  if (!deviceId || !platform) {
+    throw new functions.https.HttpsError('invalid-argument');
+  }
+
+  const devicesRef = db.collection('UsuariosDevices').doc(uid);
+  const snap = await devicesRef.collection('lista').get();
+
+  if (snap.size >= 3) {
+    throw new functions.https.HttpsError('permission-denied');
+  }
+
+  await devicesRef.collection('lista').doc(deviceId).set({
+    deviceId,
+    platform,
+    expoPushToken: pushToken || null,
+    ativo: true,
+    criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    ultimoAcesso: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true };
+});
+/*=============================
+   🌍 bloquearConta
+================================ */
+exports.bloquearConta = functions.https.onCall(async (data, context) => {
+  if (!context.auth.token.admin) {
+    throw new functions.https.HttpsError('permission-denied');
+  }
+
+  const { uid, motivo } = data;
+
+  await db.collection('UsuariosFlags').doc(uid).set({
+    contaBloqueada: true,
+    motivo,
+    bloqueadoEm: admin.firestore.FieldValue.serverTimestamp(),
+  });
+});
+/* ===============================
+   🔐 registrarLogin (CORRETO)
+================================ */
+exports.registrarLogin = functions
+  .region('southamerica-east1')
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
       throw new functions.https.HttpsError(
-        'permission-denied',
-        'Apenas admin'
+        'unauthenticated',
+        'Usuário não autenticado'
       );
     }
 
-    const pedidoRef = db.collection('Pedidos').doc(pedidoId);
-    const pedidoSnap = await pedidoRef.get();
+    const uid = context.auth.uid;
 
-    if (!pedidoSnap.exists) {
-      throw new functions.https.HttpsError('not-found');
-    }
+    // 🔄 Normalização de payload
+    const deviceId = data?.deviceId || null;
+    const platform = data?.platform || data?.plataforma || null;
+    const origem = data?.origem || null;
 
-    const pedido = pedidoSnap.data();
-
-    if (pedido.status !== 'pendente') {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'Pedido já processado'
-      );
-    }
-
-    await exports.confirmarCompra(
-      { cartelas: pedido.cartelas },
-      context
-    );
-
-    await pedidoRef.update({
-      status: 'pago',
-      pagoEm: admin.firestore.FieldValue.serverTimestamp(),
+    // 🧾 AUDITORIA (imutável)
+    await db.collection('AuditoriaLogin').add({
+      uid,
+      deviceId,
+      platform,
+      origem,
+      ip: context.rawRequest?.ip || null,
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    return { success: true };
-  }
-);
-
-async function antiSpam(uid) {
-  const ref = db.collection('AntiSpam').doc(uid);
-  const snap = await ref.get();
-  const agora = Date.now();
-
-  if (snap.exists && snap.data().until > agora) {
-    throw new functions.https.HttpsError(
-      'resource-exhausted',
-      'Aguarde alguns segundos'
+    // 📌 FLAGS OPERACIONAIS
+    await db.collection('UsuariosFlags').doc(uid).set(
+      {
+        ultimoLogin: admin.firestore.FieldValue.serverTimestamp(),
+        ultimoDevice: deviceId,
+        plataforma: platform,
+        origemUltimoLogin: origem,
+      },
+      { merge: true }
     );
-  }
 
-  await ref.set({
-    until: agora + 3000, // 3 segundos
+    return { ok: true };
   });
-}

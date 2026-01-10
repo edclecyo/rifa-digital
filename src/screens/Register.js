@@ -27,13 +27,14 @@ export default function Register({ navigation }) {
       const cred = await createUserWithEmailAndPassword(auth, email, senha);
 
       // 🔥 Cria usuário no Firestore
-      await setDoc(doc(db, 'Usuarios', cred.user.uid), {
-        uid: cred.user.uid,
-        nome,
-        email,
-        tipo: 'user',
-        criadoEm: serverTimestamp(),
-      });
+      await setDoc(
+  doc(db, 'Usuarios', cred.user.uid),
+  {
+    nome: nome.trim(),
+    email,
+  },
+  { merge: true }
+);
 
       Alert.alert('✅ Sucesso', 'Conta criada com sucesso');
 

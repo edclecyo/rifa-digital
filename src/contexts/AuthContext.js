@@ -1,11 +1,13 @@
 import { createContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { auth, db } from '../services/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { onAuthStateChanged, signOut, getIdTokenResult } from 'firebase/auth';
+import { auth, db, functions } from '../services/firebase';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
-import { getIdTokenResult } from 'firebase/auth';
+
+import * as Application from 'expo-application';
 
 export const AuthContext = createContext({});
 
@@ -14,21 +16,25 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [nivelAtual, setNivelAtual] = useState('vermelho');
-  const [isAdmin, setIsAdmin] = useState(false); // 🔐 ADMIN VIA TOKEN
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  // 🔔 CONFIG PUSH ANDROID
+  // 🧷 DEVICE ID ESTÁVEL (FINTECH)
+  const deviceId =
+  Platform.OS === 'android'
+    ? Application.getAndroidId()
+    : Application.getIosIdForVendor?.() ?? 'ios-unknown';
+
+  // 🔔 ANDROID CHANNEL
   async function configureAndroidChannel() {
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('default', {
         name: 'default',
         importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#FF231F7C',
       });
     }
   }
 
-  // 🔑 GERAR TOKEN EXPO
+  // 🔔 REGISTRAR PUSH TOKEN (SEGURO)
   async function registerForPushNotifications(uid) {
     try {
       const { status } = await Notifications.getPermissionsAsync();
@@ -39,10 +45,7 @@ export function AuthProvider({ children }) {
         finalStatus = request.status;
       }
 
-      if (finalStatus !== 'granted') {
-        console.log('❌ Permissão de notificação negada');
-        return;
-      }
+      if (finalStatus !== 'granted') return;
 
       await configureAndroidChannel();
 
@@ -54,20 +57,32 @@ export function AuthProvider({ children }) {
         await Notifications.getExpoPushTokenAsync({ projectId })
       ).data;
 
-      const ref = doc(db, 'Usuarios', uid);
-
+      // 🔐 COLEÇÃO PRIVADA
       await setDoc(
-        ref,
+        doc(db, 'UsuariosPrivado', uid),
         {
           expoPushToken: token,
-          updatedAt: new Date(),
+          platform: Platform.OS,
+          deviceId,
+          atualizadoEm: serverTimestamp(),
         },
         { merge: true }
       );
-
-      console.log('✅ Expo Push Token salvo:', token);
     } catch (err) {
       console.error('❌ Erro Push Token:', err);
+    }
+  }
+
+  // 🔐 REGISTRAR LOGIN (SUBSTITUI onLogin ❌)
+  async function registrarLogin() {
+    try {
+      const call = httpsCallable(functions, 'registrarLogin');
+      await call({
+        deviceId,
+        platform: Platform.OS,
+      });
+    } catch (err) {
+      console.error('❌ Erro registrarLogin:', err);
     }
   }
 
@@ -82,27 +97,21 @@ export function AuthProvider({ children }) {
       }
 
       try {
-        // 🔐 FORÇA REFRESH DO TOKEN (CUSTOM CLAIMS)
+        // 🔐 TOKEN + CLAIMS
         const tokenResult = await getIdTokenResult(authUser, true);
-        const adminClaim = tokenResult.claims?.admin === true;
+        setIsAdmin(tokenResult.claims?.admin === true);
 
-        setIsAdmin(adminClaim);
+        // 🔥 PERFIL KYC
+        const snap = await getDoc(doc(db, 'Usuarios', authUser.uid));
+        setProfile(snap.exists() ? snap.data() : null);
 
-        // 🔥 PERFIL FIRESTORE (continua igual)
-        const ref = doc(db, 'Usuarios', authUser.uid);
-        const snap = await getDoc(ref);
-
-        const data = snap.exists()
-          ? snap.data()
-          : { tipo: 'admin' };
-
-        setProfile(data);
         setUser(authUser);
 
-        // 🔔 PUSH
+        // 🔔 PUSH TOKEN
         await registerForPushNotifications(authUser.uid);
 
-        console.log('🔐 Admin (token):', adminClaim);
+        // 🧾 LOGIN AUDITÁVEL
+        await registrarLogin();
       } catch (err) {
         console.error('❌ Erro AuthContext:', err);
       } finally {
@@ -128,7 +137,7 @@ export function AuthProvider({ children }) {
         loading,
         nivelAtual,
         setNivelAtual,
-        isAdmin, // ✅ AGORA VEM DO TOKEN (CORRETO)
+        isAdmin,
         logout,
       }}
     >
