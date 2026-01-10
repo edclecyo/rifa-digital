@@ -75,17 +75,22 @@ export function AuthProvider({ children }) {
 
   // 🔐 REGISTRAR LOGIN (SUBSTITUI onLogin ❌)
   async function registrarLogin() {
-    try {
-      const call = httpsCallable(functions, 'registrarLogin');
-      await call({
-        deviceId,
-        platform: Platform.OS,
-      });
-    } catch (err) {
-      console.error('❌ Erro registrarLogin:', err);
+  try {
+    const call = httpsCallable(functions, 'registrarLogin');
+
+    await call({
+      deviceId,
+      platform: Platform.OS,
+    });
+  } catch (err) {
+    console.error('❌ Erro registrarLogin:', err);
+
+    // 🚫 DEVICE BLOQUEADO → LOGOUT FORÇADO
+    if (err?.code === 'functions/permission-denied') {
+      await signOut(auth);
     }
   }
-
+}
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
       if (!authUser) {
