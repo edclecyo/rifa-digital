@@ -34,10 +34,8 @@ export default function HomeAdmin({ navigation }) {
     );
   }
 
-  // ❌ NÃO ADMIN
   if (!isAdmin) return null;
 
-  // ✅ ADMIN CONFIRMADO
   return (
     <View style={{ flex: 1, backgroundColor: '#0f172a', padding: 20 }}>
       {/* Header */}
@@ -45,13 +43,51 @@ export default function HomeAdmin({ navigation }) {
         <Text style={{ fontSize: 28, fontWeight: 'bold', color: '#fff' }}>
           👑 Área Administrativa
         </Text>
-
         <Text style={{ marginTop: 6, fontSize: 16, color: '#cbd5f5' }}>
           Painel de controle do sistema
         </Text>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
+
+        {/* 🚨 ANTIFRAUDE */}
+        <Pressable
+          onPress={() => navigation.navigate('AntifraudeAdmin')}
+          style={{
+            backgroundColor: '#7c2d12',
+            padding: 22,
+            borderRadius: 16,
+            marginBottom: 20,
+            borderWidth: 1,
+            borderColor: '#fb923c',
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+            🚨 Antifraude & Auditoria
+          </Text>
+          <Text style={{ color: '#fed7aa', marginTop: 4 }}>
+            IP, dispositivo, compras suspeitas e bloqueios
+          </Text>
+        </Pressable>
+{/* 📄 Compliance & LGPD */}
+<Pressable
+  onPress={() => navigation.navigate('AdminCompliance')}
+  style={{
+    backgroundColor: '#1e293b',
+    padding: 22,
+    borderRadius: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+  }}
+>
+  <Text style={{ color: '#e0f2fe', fontSize: 18, fontWeight: 'bold' }}>
+    📄 Compliance & LGPD
+  </Text>
+  <Text style={{ color: '#bae6fd', marginTop: 4 }}>
+    Termos legais, PDF para bancos e auditoria
+  </Text>
+</Pressable>
         {/* 🔥 Criar Cartelas */}
         <Pressable
           onPress={() => navigation.navigate('CriarCartela', { modo: 'criar' })}
@@ -103,7 +139,7 @@ export default function HomeAdmin({ navigation }) {
           </Text>
         </Pressable>
 
-        {/* 💰 NOVO — Dashboard Financeiro Mensal */}
+        {/* 💰 Dashboard Financeiro */}
         <Pressable
           onPress={() => navigation.navigate('DashboardFinanceiroMensal')}
           style={{
@@ -115,9 +151,6 @@ export default function HomeAdmin({ navigation }) {
         >
           <Text style={{ color: '#022c22', fontSize: 18, fontWeight: 'bold' }}>
             💰 Dashboard Financeiro Mensal
-          </Text>
-          <Text style={{ color: '#064e3b', marginTop: 4 }}>
-            Entradas, saídas, lucro e Pix
           </Text>
         </Pressable>
 
@@ -133,9 +166,6 @@ export default function HomeAdmin({ navigation }) {
         >
           <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
             Dashboard Geral
-          </Text>
-          <Text style={{ color: '#e0f2fe', marginTop: 4 }}>
-            Métricas e desempenho
           </Text>
         </Pressable>
 
@@ -154,24 +184,6 @@ export default function HomeAdmin({ navigation }) {
           </Text>
         </Pressable>
 
-        {/* 📡 Status Sorteios */}
-        <Pressable
-          onPress={() => navigation.navigate('StatusSorteio')}
-          style={{
-            backgroundColor: '#16a34a',
-            padding: 22,
-            borderRadius: 16,
-            marginBottom: 16,
-          }}
-        >
-          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-            Status de Sorteios
-          </Text>
-          <Text style={{ color: '#dcfce7', marginTop: 4 }}>
-            Acompanhamento em tempo real
-          </Text>
-        </Pressable>
-
         {/* 💳 Pagamentos */}
         <Pressable
           onPress={() => navigation.navigate('AdminPagamentos')}
@@ -184,9 +196,6 @@ export default function HomeAdmin({ navigation }) {
         >
           <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
             Pagamentos
-          </Text>
-          <Text style={{ color: '#fef3c7', marginTop: 4 }}>
-            Histórico financeiro
           </Text>
         </Pressable>
       </ScrollView>

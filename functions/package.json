@@ -13,9 +13,11 @@
     "logs": "firebase functions:log"
   },
   "dependencies": {
+    "@google-cloud/tasks": "^6.2.1",
     "firebase-admin": "^11.11.1",
     "firebase-functions": "^4.9.0",
     "json2csv": "^6.0.0-alpha.2",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "pdfkit": "^0.17.2"
   }
 }

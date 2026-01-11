@@ -1,8 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import {
-  initializeAuth,
-  getReactNativePersistence,
-} from 'firebase/auth';
+import { initializeAuth, getReactNativePersistence } from 'firebase/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
@@ -16,21 +13,17 @@ const firebaseConfig = {
   appId: '1:763080965700:web:759c59dbc8e6a0e2080611',
 };
 
-// 🔥 EVITA INICIALIZAR DUAS VEZES
-const app =
-  getApps().length === 0
-    ? initializeApp(firebaseConfig)
-    : getApp();
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// 🔐 AUTH COM PERSISTÊNCIA (React Native)
+// Auth com persistência AsyncStorage
 export const auth = initializeAuth(app, {
   persistence: getReactNativePersistence(AsyncStorage),
 });
 
-// 📦 FIRESTORE
+// Firestore
 export const db = getFirestore(app);
 
-// ☁️ CLOUD FUNCTIONS (OBRIGATÓRIO p/ CSV, compras, etc)
+// Cloud Functions
 export const functions = getFunctions(app, 'southamerica-east1');
 
 export default app;

@@ -12,7 +12,8 @@ import HistoricoSorteios from '../screens/HistoricoSorteios';
 import StatusSorteio from '../screens/StatusSorteio';
 import AdminDashboardRodada from '../screens/AdminDashboardRodada';
 import DashboardFinanceiroMensal from '../screens/DashboardFinanceiroMensal';
-
+import AntifraudeAdmin from '../screens/AntifraudeAdmin';
+import AdminCompliance from '../screens/AdminCompliance';
 export default function AdminRoutes() {
   return (
     <Stack.Navigator>
@@ -27,6 +28,8 @@ export default function AdminRoutes() {
 <Stack.Screen name="AdminDashboardRodada" component={AdminDashboardRodada} options={{ title: 'AdminDashboardRodada' }} />
  <Stack.Screen name="DashboardFinanceiroMensal" component={DashboardFinanceiroMensal} options={{ title: 'DashboardFinanceiroMensal' }} />
  <Stack.Screen name="HistoricoSorteios" component={HistoricoSorteios}/>
+<Stack.Screen name="AntifraudeAdmin" component={AntifraudeAdmin}  options={{ title: 'AntifraudeAdmin' }} />  
+<Stack.Screen name="AdminCompliance" component={AdminCompliance}  options={{ title: 'AdminCompliance' }} /> 
  <Stack.Screen name="AdminPromocaoHome" component={AdminPromocaoHome} />
   </Stack.Navigator>
   );

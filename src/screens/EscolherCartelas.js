@@ -21,6 +21,7 @@ import {
 import { getFunctions, httpsCallable } from 'firebase/functions';
 
 const VALOR_CARTELA = 2.5;
+const MAX_RESERVAS = 20;
 const { width } = Dimensions.get('window');
 
 /* =========================================================
@@ -43,25 +44,27 @@ const CartelaItem = React.memo(
         ]}
       >
         <Text style={styles.cartelaId}>🎟️ Cartela #{item.id}</Text>
-        <Text style={styles.numerosTexto}>🎯 nº da sorte [{item.numeros?.join(', ')}]</Text>
+        <Text style={styles.numerosTexto}>
+          🎯 nº da sorte [{item.numeros?.join(', ')}]
+        </Text>
         <Text style={styles.valor}>💰 R$ {VALOR_CARTELA.toFixed(2)}</Text>
+
         {item.status === 'reservada' && (
           <Text style={styles.statusTexto}>
             ⏱️ {minhaReserva ? 'Sua reserva' : 'Reservada'}
           </Text>
         )}
-        {item.status === 'vendida' && <Text style={styles.vendidaTexto}>❌ Vendida</Text>}
+
+        {item.status === 'vendida' && (
+          <Text style={styles.vendidaTexto}>❌ Vendida</Text>
+        )}
       </Pressable>
     );
-  },
-  (prev, next) =>
-    prev.item.status === next.item.status &&
-    prev.item.id === next.item.id &&
-    prev.item.reservadaPor === next.item.reservadaPor
+  }
 );
 
 /* =========================================================
-   📱 Escolher Cartelas otimizado
+   📱 Escolher Cartelas
 ========================================================= */
 export default function EscolherCartelas() {
   const { user, loading: authLoading } = useContext(AuthContext);
@@ -76,15 +79,14 @@ export default function EscolherCartelas() {
   const functions = useMemo(() => getFunctions(app, 'us-central1'), []);
   const reservarCartela = useMemo(() => httpsCallable(functions, 'reservarCartela'), [functions]);
   const cancelarReserva = useMemo(() => httpsCallable(functions, 'cancelarReserva'), [functions]);
-  const confirmarCompra = useMemo(() => httpsCallable(functions, 'confirmarCompra'), [functions]);
+  const comprarComSaldo = useMemo(() => httpsCallable(functions, 'comprarComSaldo'), [functions]);
 
   /* 🔄 Rodada atual */
   useEffect(() => {
     const ref = doc(db, 'StatusSorteio', 'geral');
-    const unsub = onSnapshot(ref, snap => {
+    return onSnapshot(ref, snap => {
       if (snap.exists()) setRodadaAtual(snap.data().rodada || 1);
     });
-    return unsub;
   }, []);
 
   /* 🔄 Cartelas em tempo real */
@@ -92,12 +94,16 @@ export default function EscolherCartelas() {
     if (!user?.uid || !rodadaAtual) return;
 
     unsubCartelas.current?.();
-    const q = query(collection(db, 'Cartelas'), where('rodada', '==', rodadaAtual));
+
+    const q = query(
+      collection(db, 'Cartelas'),
+      where('rodada', '==', rodadaAtual),
+      where('status', 'in', ['disponivel', 'reservada'])
+    );
 
     unsubCartelas.current = onSnapshot(q, snap => {
-      // Atualiza o Map com todos os docs do snapshot, garantindo que cartelas apareçam imediatamente
       const map = new Map();
-      snap.docs.forEach(doc => map.set(doc.id, { id: doc.id, ...doc.data() }));
+      snap.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
       setCartelasMap(map);
     });
 
@@ -109,38 +115,55 @@ export default function EscolherCartelas() {
     cartela => {
       if (loadingReserva) return;
 
+      const reservasAtuais = Array.from(cartelasMap.values()).filter(
+        c => c.status === 'reservada' && c.reservadaPor === user.uid
+      ).length;
+
+      if (cartela.status === 'disponivel' && reservasAtuais >= MAX_RESERVAS) {
+        return Alert.alert(`Limite de ${MAX_RESERVAS} cartelas por compra`);
+      }
+
       setLoadingReserva(true);
-      const acao = cartela.status === 'disponivel' ? reservarCartela : cancelarReserva;
+
+      const acao = cartela.status === 'disponivel'
+        ? reservarCartela
+        : cancelarReserva;
+
       acao({ cartelaId: cartela.id })
-        .catch(e => Alert.alert('Erro', e?.message || e?.details || 'Falha na ação'))
+        .catch(e => Alert.alert('Erro', e?.message || 'Falha na ação'))
         .finally(() => setLoadingReserva(false));
     },
-    [loadingReserva, reservarCartela, cancelarReserva]
+    [loadingReserva, cartelasMap, user?.uid]
   );
 
-  /* 🛒 Comprar cartelas */
-  const comprar = useCallback(() => {
-    const minhasReservasArray = Array.from(cartelasMap.values())
-      .filter(c => c.status === 'reservada' && c.reservadaPor === user.uid)
-      .map(c => c.id);
+  /* 🛒 Comprar com saldo (onCall) */
+  const comprar = useCallback(async () => {
+    try {
+      const cartelasSelecionadas = Array.from(cartelasMap.values())
+        .filter(c => c.status === 'reservada' && c.reservadaPor === user.uid)
+        .map(c => c.id);
 
-    if (minhasReservasArray.length === 0) return Alert.alert('Nenhuma cartela reservada');
+      if (cartelasSelecionadas.length === 0) {
+        return Alert.alert('Nenhuma cartela reservada');
+      }
 
-    setLoadingCompra(true);
-    confirmarCompra({ cartelas: minhasReservasArray })
-      .then(() => {
-        Alert.alert('✅ Compra confirmada');
-      })
-      .catch(e => Alert.alert('Erro', e?.message || e?.details || 'Erro ao comprar'))
-      .finally(() => setLoadingCompra(false));
-  }, [cartelasMap, confirmarCompra, user?.uid]);
+      setLoadingCompra(true);
 
-  /* 🔹 FlatList renderItem */
-  const renderItem = useCallback(
-    ({ item }) => <CartelaItem item={item} userId={user?.uid} onPress={onToggle} />,
-    [user?.uid, onToggle]
-  );
+      await comprarComSaldo({
+        cartelas: cartelasSelecionadas,
+        nomeComprador: user.displayName || 'Anônimo',
+      });
 
+      Alert.alert('✅ Compra realizada com sucesso!');
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Erro', err?.message || 'Falha ao comprar');
+    } finally {
+      setLoadingCompra(false);
+    }
+  }, [cartelasMap, user]);
+
+  /* 🔹 Render */
   const cartelasArray = useMemo(
     () => Array.from(cartelasMap.values()).sort((a, b) => a.id.localeCompare(b.id)),
     [cartelasMap]
@@ -159,27 +182,34 @@ export default function EscolherCartelas() {
       <FlatList
         data={cartelasArray}
         keyExtractor={item => item.id}
-        renderItem={renderItem}
-        initialNumToRender={15}
-        maxToRenderPerBatch={20}
-        windowSize={11}
-        removeClippedSubviews={false} // para evitar flash
+        renderItem={({ item }) => (
+          <CartelaItem item={item} userId={user.uid} onPress={onToggle} />
+        )}
         contentContainerStyle={{ paddingBottom: 180 }}
       />
 
-      {/* 🛒 BOTÃO FIXO */}
       <View style={styles.botaoFixo}>
-        <Text style={styles.resumoTexto}>🎟 {cartelasArray.filter(c => c.status === 'reservada' && c.reservadaPor === user.uid).length} cartelas</Text>
-        <Text style={styles.totalTexto}>💵 R$ {(cartelasArray.filter(c => c.status === 'reservada' && c.reservadaPor === user.uid).length * VALOR_CARTELA).toFixed(2)}</Text>
+        <Text style={styles.resumoTexto}>
+          🎟 {cartelasArray.filter(
+            c => c.status === 'reservada' && c.reservadaPor === user.uid
+          ).length} cartelas
+        </Text>
+
+        <Text style={styles.totalTexto}>
+          💵 R$ {(cartelasArray.filter(
+            c => c.status === 'reservada' && c.reservadaPor === user.uid
+          ).length * VALOR_CARTELA).toFixed(2)}
+        </Text>
+
         <Pressable
           onPress={comprar}
-          disabled={loadingCompra || cartelasArray.filter(c => c.status === 'reservada' && c.reservadaPor === user.uid).length === 0}
-          style={[
-            styles.botaoComprarFinal,
-            (loadingCompra || cartelasArray.filter(c => c.status === 'reservada' && c.reservadaPor === user.uid).length === 0) && { opacity: 0.6 },
-          ]}
+          disabled={loadingCompra}
+          style={[styles.botaoComprarFinal, loadingCompra && { opacity: 0.6 }]}
         >
-          {loadingCompra ? <ActivityIndicator color="#fff" /> : <Text style={styles.botaoTexto}>COMPRAR CARTELA</Text>}
+          {loadingCompra
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.botaoTexto}>COMPRAR CARTELAS</Text>
+          }
         </Pressable>
       </View>
     </View>

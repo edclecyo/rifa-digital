@@ -2,12 +2,11 @@ import { createContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { onAuthStateChanged, signOut, getIdTokenResult } from 'firebase/auth';
 import { auth, db, functions } from '../services/firebase';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants';
-
 import * as Application from 'expo-application';
+import Constants from 'expo-constants';
 
 export const AuthContext = createContext({});
 
@@ -15,16 +14,14 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [nivelAtual, setNivelAtual] = useState('vermelho');
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // 🧷 DEVICE ID ESTÁVEL (FINTECH)
-  const deviceId =
-  Platform.OS === 'android'
-    ? Application.getAndroidId()
-    : Application.getIosIdForVendor?.() ?? 'ios-unknown';
+  // ✅ Identificador do dispositivo
+  const deviceId = Platform.OS === 'android'
+    ? Application.getAndroidId?.() ?? 'android-emulator'
+    : Application.getIosIdForVendor?.() ?? 'ios-simulator';
 
-  // 🔔 ANDROID CHANNEL
+  // Configura canal Android para notificações
   async function configureAndroidChannel() {
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('default', {
@@ -34,7 +31,7 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // 🔔 REGISTRAR PUSH TOKEN (SEGURO)
+  // Registrar push token
   async function registerForPushNotifications(uid) {
     try {
       const { status } = await Notifications.getPermissionsAsync();
@@ -53,11 +50,8 @@ export function AuthProvider({ children }) {
         Constants.expoConfig?.extra?.eas?.projectId ??
         Constants.easConfig?.projectId;
 
-      const token = (
-        await Notifications.getExpoPushTokenAsync({ projectId })
-      ).data;
+      const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
 
-      // 🔐 COLEÇÃO PRIVADA
       await setDoc(
         doc(db, 'UsuariosPrivado', uid),
         {
@@ -73,24 +67,37 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // 🔐 REGISTRAR LOGIN (SUBSTITUI onLogin ❌)
+  // Registrar login via Cloud Function
   async function registrarLogin() {
-  try {
-    const call = httpsCallable(functions, 'registrarLogin');
+    try {
+      // ⚠️ Região da função, ajuste se necessário
+      const call = httpsCallable(functions, 'registrarLogin', { region: 'southamerica-east1' });
 
-    await call({
-      deviceId,
-      platform: Platform.OS,
-    });
-  } catch (err) {
-    console.error('❌ Erro registrarLogin:', err);
+      // Força valores mesmo no emulador
+      const payload = {
+        deviceId: deviceId ?? 'emulator-device',
+        platform: Platform.OS ?? 'unknown',
+      };
 
-    // 🚫 DEVICE BLOQUEADO → LOGOUT FORÇADO
-    if (err?.code === 'functions/permission-denied') {
-      await signOut(auth);
+      const res = await call(payload);
+      console.log('✅ registrarLogin ok:', res.data);
+    } catch (err) {
+      if (err?.code === 'functions/not-found') {
+        console.warn('⚠️ registrarLogin ainda não disponível');
+        return;
+      }
+
+      if (err?.code === 'functions/permission-denied') {
+        console.warn('⚠️ Sessão inválida ou sem permissão, deslogando...');
+        await signOut(auth);
+        return;
+      }
+
+      console.error('❌ Erro registrarLogin:', err);
     }
   }
-}
+
+  // Monitorar auth state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
       if (!authUser) {
@@ -102,20 +109,20 @@ export function AuthProvider({ children }) {
       }
 
       try {
-        // 🔐 TOKEN + CLAIMS
+        // 🔐 Verifica se é admin
         const tokenResult = await getIdTokenResult(authUser, true);
         setIsAdmin(tokenResult.claims?.admin === true);
 
-        // 🔥 PERFIL KYC
+        // 🔎 Pega dados do perfil
         const snap = await getDoc(doc(db, 'Usuarios', authUser.uid));
         setProfile(snap.exists() ? snap.data() : null);
 
         setUser(authUser);
 
-        // 🔔 PUSH TOKEN
+        // 🚀 Primeiro registra push token
         await registerForPushNotifications(authUser.uid);
 
-        // 🧾 LOGIN AUDITÁVEL
+        // 🚀 Depois registra login no backend
         await registrarLogin();
       } catch (err) {
         console.error('❌ Erro AuthContext:', err);
@@ -135,17 +142,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        profile,
-        loading,
-        nivelAtual,
-        setNivelAtual,
-        isAdmin,
-        logout,
-      }}
-    >
+    <AuthContext.Provider value={{ user, profile, loading, isAdmin, logout }}>
       {children}
     </AuthContext.Provider>
   );
