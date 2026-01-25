@@ -5,6 +5,7 @@ const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const { CloudTasksClient } = require('@google-cloud/tasks');
 const { exigirKycNivel } = require("./financeiro/kyc");
+const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
 const { PassThrough } = require("stream");
 
@@ -21,6 +22,11 @@ const NUMEROS_POR_CARTELA = 6;
 const LIMITE_BATCH = 500;
 const TEMPO_RESERVA_MS = 15 * 60 * 1000; // 15 minutos
 const VALOR_CARTELA = 2.5;
+
+// Versão inicial da configuração LGPD
+const VERSAO_INICIAL = "1.0";
+const VERSAO_ATUAL = "1.0";
+
 
 /* ===============================
    METAS
@@ -393,50 +399,104 @@ async function verificarAntifraude({
    WORKER COMPRA (Cloud Tasks)
 ================================ */
 exports.workerProcessarCompra = functions.https.onRequest(async (req, res) => {
-  const header = req.headers['x-cloudtasks-taskname'];
-  if (!header) return res.status(403).send("Forbidden");
+  /* ===============================
+     🔐 PROTEÇÃO CLOUD TASKS
+  ================================ */
+  const taskName = req.headers["x-cloudtasks-taskname"];
+  if (!taskName) {
+    return res.status(403).send("Forbidden");
+  }
 
-  await db.runTransaction(async tx => {
-    const snap = await tx.get(compraRef);
-    if (!snap.exists) throw new Error("Compra inexistente");
+  const { compraId } = req.body;
+  if (!compraId) {
+    return res.status(400).send("compraId obrigatório");
+  }
 
-    const compra = snap.data();
+  const compraRef = db.collection("Compras").doc(compraId);
+  let compra;
 
-    // 🔒 FSM HARD
-    if (compra.status !== "PENDENTE") {
-      return;
-    }
-await avaliarRiscoAntifraude({
-  uid: compra.uid,
-  pedidoId: compraId,
-  ip: req.headers["x-forwarded-for"],
-  deviceId: compra.deviceId || null,
-});
-    tx.update(compraRef, {
-      status: "PROCESSANDO",
-      processandoEm: admin.firestore.FieldValue.serverTimestamp(),
+  /* ===============================
+     🧠 FSM HARD + IDEMPOTÊNCIA
+  ================================ */
+  try {
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(compraRef);
+      if (!snap.exists) {
+        throw new Error("Compra inexistente");
+      }
+
+      compra = snap.data();
+
+      // 🔒 IDEMPOTÊNCIA ABSOLUTA
+      if (compra.status !== "PENDENTE") {
+        throw new Error(`Compra já processada (${compra.status})`);
+      }
+
+      // 🔐 Trava FSM
+      tx.update(compraRef, {
+        status: "PROCESSANDO",
+        processandoEm: admin.firestore.FieldValue.serverTimestamp(),
+        taskName, // auditoria
+      });
     });
-  });
+  } catch (err) {
+    // ⚠️ Task duplicada / replay → ACK silencioso
+    return res.status(200).send({ ok: true, ignored: true });
+  }
 
   try {
-    // 💰 Ledger (imutável)
+    /* ===============================
+       🛡️ ANTIFRAUDE
+    ================================ */
+    await avaliarRiscoAntifraude({
+      uid: compra.uid,
+      pedidoId: compraId,
+      ip: req.headers["x-forwarded-for"] || null,
+      deviceId: compra.deviceId || null,
+    });
+
+    /* ===============================
+       💰 FINANCEIRO (LEDGER)
+    ================================ */
     await registrarDebito(compraId);
 
-    // 🎟️ Vender cartelas
+    /* ===============================
+       🎟️ CARTELAS (TRAVA HARD)
+    ================================ */
     await venderCartelas(compraId);
 
+    /* ===============================
+       🔗 COMPARTILHAMENTO PAGO
+       (somente após compra válida)
+    ================================ */
+    await registrarCompartilhamentoAposCompra({
+      indicadoUid: compra.uid,
+    });
+
+    /* ===============================
+       ✅ FINALIZA FSM
+    ================================ */
     await compraRef.update({
       status: "PROCESSADA",
       finalizadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    res.send({ ok: true });
+    return res.status(200).send({ ok: true });
+
   } catch (err) {
+    console.error("🔥 Erro workerProcessarCompra:", err);
+
+    /* ===============================
+       ❌ ERRO CONTROLADO
+       (sem retry infinito)
+    ================================ */
     await compraRef.update({
       status: "ERRO",
       erro: err.message,
+      erroEm: admin.firestore.FieldValue.serverTimestamp(),
     });
-    res.status(500).send(err.message);
+
+    return res.status(500).send(err.message);
   }
 });
 
@@ -493,7 +553,139 @@ async function processarCompra({ uid, cartelas, nomeComprador }) {
 
   return cartelasCompradas;
 }
+/* ===============================
+   workerProcessarPedid
+================================ */
+exports.workerProcessarPedido = functions.firestore
+  .document("Pedidos/{pedidoId}")
+  .onUpdate(async (change, context) => {
+    const depois = change.after.data();
+    const pedidoId = context.params.pedidoId;
 
+    if (depois.status !== "pago" || depois.processado) return;
+
+    const {
+      VALOR_CARTELA,
+      FUNDO_PREMIO,
+      VALOR_INDICACAO,
+      CUSTO_APP,
+      LUCRO_PLATAFORMA,
+    } = require("./financeiro.config");
+
+    const batch = db.batch();
+
+    // 🔹 Criar cartela
+    const cartelaRef = db.collection("Cartelas").doc();
+    batch.set(cartelaRef, {
+      uid: depois.uid,
+      pedidoId,
+      valorUnitario: VALOR_CARTELA,
+      fundoPremio: FUNDO_PREMIO,
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // 🔹 Financeiro
+    const financeiroRef = db.collection("Financeiro").doc();
+    batch.set(financeiroRef, {
+      uid: depois.uid,
+      pedidoId,
+      entrada: VALOR_CARTELA,
+      premio: FUNDO_PREMIO,
+      indicacao: VALOR_INDICACAO,
+      custoApp: CUSTO_APP,
+      lucroPlataforma: LUCRO_PLATAFORMA,
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // 🔹 Atualizar sorteio
+    batch.update(db.doc("Sorteios/ativo"), {
+      cartelasVendidas: admin.firestore.FieldValue.increment(1),
+      fundoPremio: admin.firestore.FieldValue.increment(FUNDO_PREMIO),
+    });
+
+    // 🔹 Marcar pedido como processado
+    batch.update(change.after.ref, { processado: true });
+
+    await batch.commit();
+  });
+
+/* ===============================
+   registrarCompartilhamentoAposCompra
+================================ */
+async function registrarCompartilhamentoAposCompra({ indicadoUid }) {
+  const indicacaoRef = db.collection("Indicacoes").doc(indicadoUid);
+  const hoje = new Date().toISOString().slice(0, 10);
+
+  await db.runTransaction(async (tx) => {
+    const indicacaoSnap = await tx.get(indicacaoRef);
+    if (!indicacaoSnap.exists) return; // sem indicação
+
+    const indicacao = indicacaoSnap.data();
+
+    // 🔒 Já paga → idempotência
+    if (indicacao.pago === true) return;
+
+    const { indicadorUid } = indicacao;
+
+    // 🔒 Anti auto-indicação
+    if (indicadorUid === indicadoUid) return;
+
+    const diarioRef = db
+      .collection("IndicacoesDiarias")
+      .doc(`${indicadorUid}_${hoje}`);
+
+    const diarioSnap = await tx.get(diarioRef);
+    const totalPagoHoje = diarioSnap.exists
+      ? diarioSnap.data().totalPago || 0
+      : 0;
+
+    // ⛔ Limite diário: 3
+    if (totalPagoHoje >= 3) return;
+
+    // 💰 Credita saldo
+    tx.update(
+      db.collection("UsuariosPrivado").doc(indicadorUid),
+      {
+        saldo: admin.firestore.FieldValue.increment(0.25),
+        atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      }
+    );
+
+    // 📊 Atualiza controle diário
+    tx.set(
+      diarioRef,
+      {
+        indicadorUid,
+        data: hoje,
+        totalPago: totalPagoHoje + 1,
+        atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    // 🔐 Marca indicação como paga (NUNCA mais paga)
+    tx.update(indicacaoRef, {
+      pago: true,
+      pagoEm: admin.firestore.FieldValue.serverTimestamp(),
+      valorPago: 0.25,
+    });
+
+    // 📜 Ledger imutável
+    tx.set(
+      db
+        .collection("UsuariosPrivado")
+        .doc(indicadorUid)
+        .collection("LedgerFinanceiro")
+        .doc(),
+      {
+        tipo: "indicacao",
+        valor: 0.25,
+        indicadoUid,
+        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      }
+    );
+  });
+}
 /* ===============================
    ATUALIZAR RANKING
 ================================ */
@@ -526,6 +718,110 @@ async function atualizarStatusGlobal({ novasVendas = 0 }) {
     tx.set(ref, { ...atual, cartelasVendidas, faturamento, atualizadoEm: admin.firestore.FieldValue.serverTimestamp() }, { merge:true });
   });
 }
+/* ===============================
+   atualizarMissaoIndicacao
+================================ */
+async function atualizarMissaoIndicacao(uid) {
+  const ref = db.collection('MissoesAtivas').doc(uid);
+
+  await db.runTransaction(async (t) => {
+    const snap = await t.get(ref);
+    if (!snap.exists) return;
+
+    const data = snap.data();
+    if (data.atual >= data.meta) return;
+
+    t.update(ref, {
+      atual: admin.firestore.FieldValue.increment(1),
+    });
+  });
+}
+
+/* ===============================
+   criarOuResetarMissao
+================================ */
+exports.criarOuResetarMissao = functions.auth.user().onCreate(async (user) => {
+  const ref = db.collection('MissoesAtivas').doc(user.uid);
+
+  const agora = admin.firestore.Timestamp.now();
+  const expira = admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() + 24 * 60 * 60 * 1000)
+  );
+
+  await ref.set({
+    meta: 3,
+    atual: 0,
+    recompensa: '1 cartela grátis',
+    tipo: 'diaria',
+    criadaEm: agora,
+    expiraEm: expira,
+  });
+});
+/* ===============================
+  atualizarRanking de Indicaçoes
+================================ */
+async function atualizarRanking(uid, nome) {
+  const ref = db.collection('RankingIndicacoes').doc(uid);
+
+  await ref.set(
+    {
+      nome,
+      quantidade: admin.firestore.FieldValue.increment(1),
+      atualizadoEm: admin.firestore.Timestamp.now(),
+    },
+    { merge: true }
+  );
+}
+/* ===============================
+   verificarSorteio
+================================ */
+exports.verificarSorteio = functions.firestore
+  .document("Sorteios/ativo")
+  .onUpdate(async (change) => {
+    const depois = change.after.data();
+    const cartelas = depois.cartelasVendidas;
+
+    const controleRef = db.doc("Sorteios/controle");
+    const controleSnap = await controleRef.get();
+
+    const ultimo = controleSnap.exists ? controleSnap.data().ultimoSorteioEm : 0;
+
+    let premio = null;
+    let limite = null;
+
+    if (cartelas >= ultimo + 500) {
+      premio = 500;
+      limite = ultimo + 500;
+    } else if (cartelas >= ultimo + 100) {
+      premio = 100;
+      limite = ultimo + 100;
+    }
+
+    if (!premio) return;
+
+    const cartelasSnap = await db
+      .collection("Cartelas")
+      .where("criadoEm", "<=", admin.firestore.Timestamp.fromMillis(Date.now()))
+      .get();
+
+    if (cartelasSnap.empty) return;
+
+    const vencedor =
+      cartelasSnap.docs[Math.floor(Math.random() * cartelasSnap.docs.length)];
+
+    const batch = db.batch();
+
+    batch.set(db.collection("Premios").doc(), {
+      uid: vencedor.data().uid,
+      valor: premio,
+      cartelasNoMomento: limite,
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    batch.set(controleRef, { ultimoSorteioEm: limite }, { merge: true });
+
+    await batch.commit();
+  });
 
 /* ===============================
    ATUALIZAR STATUS SORTEIO
@@ -589,28 +885,85 @@ async function atualizarStatusSorteio(qtdVendidas) {
     );
   }
 }
+/* ===============================
+   getRankingSemanal
+================================ */
+exports.getRankingSemanal = functions.https.onCall(async () => {
+  return db.collection("Ranking")
+    .orderBy("pontuacao", "desc")
+    .limit(10)
+    .get();
+});
+/* ===============================
+   getDashboardResumo
+================================ */
+exports.getDashboardResumo = functions
+  .region('southamerica-east1')
+  .https.onCall(async (_, context) => {
 
+    // 🔐 Apenas admin (ou você pode liberar user)
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated');
+    }
+
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    const [
+      faturamentoSnap,
+      usuariosSnap,
+      cartelasSnap,
+      fraudeSnap
+    ] = await Promise.all([
+      db.collection('FinanceiroResumo').doc(hoje).get(),
+      db.collection('UsuariosResumo').doc(hoje).get(),
+      db.collection('CartelasResumo').doc(hoje).get(),
+      db.collection('FraudesIndicacao')
+        .where('data', '==', hoje)
+        .get(),
+    ]);
+
+    return {
+      faturamentoHoje: faturamentoSnap.exists ? faturamentoSnap.data().total : 0,
+      usuariosAtivos: usuariosSnap.exists ? usuariosSnap.data().ativos : 0,
+      cartelasVendidasHoje: cartelasSnap.exists ? cartelasSnap.data().vendidas : 0,
+      indicacoesSuspeitas: fraudeSnap.size,
+    };
+  });
 /* ===============================
    SORTEIO AUTOMÁTICO
 ================================ */
 async function sortearPremio(premio, nivel, rodadaId) {
-  const snap = await db.collection("Cartelas")
-    .where("rodada", "==", rodadaId)
-    .where("status", "==", "vendida")
-    .get();
+  const sorteioKey = `rodada_${rodadaId}_${nivel}`;
+  const lockRef = db.collection("Locks").doc(sorteioKey);
 
-  if (snap.empty) return;
+  await db.runTransaction(async tx => {
+    const lockSnap = await tx.get(lockRef);
+    if (lockSnap.exists) return; // 🔒 já sorteado
 
-  const vencedora = snap.docs[
-    Math.floor(Math.random() * snap.docs.length)
-  ];
+    const snap = await tx.get(
+      db.collection("Cartelas")
+        .where("rodada", "==", rodadaId)
+        .where("status", "==", "vendida")
+    );
 
-  await db.collection("Sorteios").add({
-    rodadaId,
-    cartelaId: vencedora.id,
-    premio,
-    nivel,
-    criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    if (snap.empty) return;
+
+    const vencedora = snap.docs[
+      Math.floor(Math.random() * snap.docs.length)
+    ];
+
+    tx.set(db.collection("Sorteios").doc(sorteioKey), {
+      rodadaId,
+      cartelaId: vencedora.id,
+      premio,
+      nivel,
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    tx.set(lockRef, {
+      executado: true,
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
   });
 }
 /* ===============================
@@ -618,51 +971,75 @@ async function sortearPremio(premio, nivel, rodadaId) {
 ================================ */
 exports.verificarDepositosPendentes = functions.pubsub
   .schedule('every 1 minutes')
+  .timeZone('America/Sao_Paulo')
   .onRun(async () => {
     console.log('⏱ Verificando depósitos pendentes...');
 
-    const depositosSnap = await db
-      .collectionGroup('Depositos')
-      .where('status', '==', 'pendente')
-      .limit(50)
-      .get();
+    try {
+      const depositosSnap = await db
+        .collectionGroup('Depositos')
+        .where('status', '==', 'pendente')
+        .limit(50)
+        .get();
 
-    if (depositosSnap.empty) return;
+      if (depositosSnap.empty) {
+        console.log('✅ Nenhum depósito pendente');
+        return null;
+      }
 
-    for (const depDoc of depositosSnap.docs) {
-      const dep = depDoc.data();
-      const uid = depDoc.ref.parent.parent.id;
-      const valor = dep.valor || 0;
-      if (valor <= 0) continue;
+      for (const depDoc of depositosSnap.docs) {
+        const dep = depDoc.data();
 
-      const saldoRef = db.collection('UsuariosPrivado').doc(uid);
+        const userRef = depDoc.ref.parent.parent;
+        if (!userRef) continue;
 
-      await db.runTransaction(async (tx) => {
-        const saldoSnap = await tx.get(saldoRef);
-        const saldoAtual = saldoSnap.exists ? saldoSnap.data().saldo || 0 : 0;
+        const uid = userRef.id;
+        const valor = Number(dep.valor || 0);
 
-        tx.set(saldoRef, {
-          saldo: saldoAtual + valor,
-          atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
+        if (!uid || valor <= 0) continue;
 
-        tx.update(depDoc.ref, {
-          status: 'confirmado',
-          confirmadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        const saldoRef = db.collection('UsuariosPrivado').doc(uid);
+
+        await db.runTransaction(async (tx) => {
+          const saldoSnap = await tx.get(saldoRef);
+          const saldoAtual = saldoSnap.exists
+            ? saldoSnap.data().saldo || 0
+            : 0;
+
+          tx.set(
+            saldoRef,
+            {
+              saldo: saldoAtual + valor,
+              atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+
+          tx.update(depDoc.ref, {
+            status: 'confirmado',
+            confirmadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+          tx.set(
+            saldoRef.collection('HistoricoFinanceiro').doc(),
+            {
+              tipo: 'deposito',
+              valor,
+              origem: 'pix',
+              criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+            }
+          );
         });
 
-        tx.set(saldoRef.collection('HistoricoFinanceiro').doc(), {
-          tipo: 'deposito',
-          valor,
-          origem: 'pix',
-          criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      });
+        console.log(`💰 Depósito confirmado | UID: ${uid} | Valor: ${valor}`);
+      }
 
-      console.log(`💰 Depósito confirmado: ${valor} → ${uid}`);
+      return null;
+    } catch (err) {
+      console.error('❌ Erro verificarDepositosPendentes:', err);
+      return null;
     }
   });
-
   /* ===============================
    API — COMPRAR COM SALDO
 ================================ */
@@ -933,114 +1310,420 @@ async function avaliarRiscoAntifraude({ uid, pedidoId, ip, deviceId }) {
   });
 }
  /* ===============================
-    gerarPdfLegal
+    calcularScoreIndicaca
   ================================ */
-exports.gerarPdfLegal = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated");
-  }
+async function calcularScoreIndicacao({ indicadorUid, indicadoUid, ip, deviceId }) {
+  let score = 0;
 
-  const uid = context.auth.uid;
+  // ⚠️ Mesmo IP
+  if (await mesmoIP(indicadorUid, indicadoUid, ip)) score += 30;
 
-  // 🔎 Dados do usuário
-  const userSnap = await db.collection("Usuarios").doc(uid).get();
-  if (!userSnap.exists) {
-    throw new functions.https.HttpsError("not-found", "Usuário não encontrado");
-  }
+  // ⚠️ Mesmo device
+  if (await mesmoDevice(indicadorUid, indicadoUid, deviceId)) score += 40;
 
-  const user = userSnap.data();
+  // ⚠️ Muitas indicações recentes
+  if (await excessoIndicacoes(indicadorUid)) score += 20;
 
-  if (!user.consentimentoLGPD?.aceito) {
-    throw new functions.https.HttpsError(
-      "failed-precondition",
-      "LGPD não aceita"
-    );
-  }
+  // ⚠️ Conta nova
+  if (await contaNova(indicadorUid)) score += 10;
 
-  // 🧾 Criação do PDF
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
-  const stream = new PassThrough();
-  doc.pipe(stream);
+  return score;
+   }
+  
+// ==============================
+// Função interna: cria ou atualiza ConfigLGPD
+// ==============================
+async function criarOuAtualizarConfigLGPD() {
+  const ref = db.collection("ConfigLGPD").doc("ATUAL");
+  const snap = await ref.get();
+  const agora = admin.firestore.FieldValue.serverTimestamp();
 
-  /* ===============================
-     CABEÇALHO
-  ================================ */
-  doc
-    .fontSize(18)
-    .text("TERMO DE CONSENTIMENTO LGPD", { align: "center" })
-    .moveDown(2);
-
-  doc
-    .fontSize(12)
-    .text(
-      "Este documento comprova o consentimento expresso do usuário para tratamento de dados pessoais conforme a Lei Geral de Proteção de Dados (Lei nº 13.709/2018).",
-      { align: "justify" }
-    )
-    .moveDown(2);
-
-  /* ===============================
-     DADOS DO USUÁRIO
-  ================================ */
-  doc.fontSize(12).text(`Nome: ${user.nome}`);
-  doc.text(`Email: ${user.email}`);
-  doc.text(`UID: ${uid}`);
-  doc.text(
-    `Data do aceite: ${
-      user.consentimentoLGPD.aceitoEm.toDate().toLocaleString("pt-BR")
-    }`
-  );
-  doc.text(`IP: ${user.consentimentoLGPD.ip || "não informado"}`);
-  doc.text(`Device: ${user.consentimentoLGPD.device || "não informado"}`);
-
-  doc.moveDown(2);
-
-  /* ===============================
-     TEXTO LEGAL
-  ================================ */
-  doc.fontSize(11).text(
-    `
-O titular declara estar ciente e de acordo com a coleta, armazenamento,
-tratamento e compartilhamento de seus dados pessoais, exclusivamente para
-fins operacionais, financeiros, antifraude, cumprimento de obrigações legais
-e regulatórias, incluindo integração com instituições financeiras e meios
-de pagamento.
-
-Este consentimento pode ser revogado a qualquer momento mediante solicitação
-formal, respeitando as obrigações legais vigentes.
-    `,
-    { align: "justify" }
-  );
-
-  doc.moveDown(3);
-
-  /* ===============================
-     ASSINATURA DIGITAL
-  ================================ */
-  doc.text("Assinatura digital:", { continued: true });
-  doc.text(` ${uid.substring(0, 8)}-${Date.now()}`);
-  doc.moveDown(1);
-
-  doc.text("Documento gerado automaticamente pelo sistema.", {
-    align: "center",
-  });
-
-  doc.end();
-
-  /* ===============================
-     RETORNO BASE64
-  ================================ */
-  const chunks = [];
-  stream.on("data", (chunk) => chunks.push(chunk));
-
-  return new Promise((resolve, reject) => {
-    stream.on("end", () => {
-      const pdfBuffer = Buffer.concat(chunks);
-      resolve({
-        base64: pdfBuffer.toString("base64"),
-        nomeArquivo: `termo-lgpd-${uid}.pdf`,
-      });
+  if (!snap.exists) {
+    await ref.set({
+      versao: String(VERSAO_ATUAL),
+      ativo: true,
+      criadoEm: agora,
+      atualizadoEm: agora,
     });
 
-    stream.on("error", reject);
+    return { versao: String(VERSAO_ATUAL) };
+  }
+
+  const dados = snap.data();
+
+  if (String(dados.versao) !== String(VERSAO_ATUAL)) {
+    await ref.update({
+      versao: String(VERSAO_ATUAL),
+      atualizadoEm: agora,
+    });
+
+    return { versao: String(VERSAO_ATUAL) };
+  }
+
+  return { versao: String(dados.versao) };
+}
+// ==============================
+// 🔐 inicializarConfigLGPD
+// ==============================
+exports.inicializarConfigLGPD = functions
+  .region("southamerica-east1")
+  .https.onCall(async () => {
+    try {
+      return await criarOuAtualizarConfigLGPD();
+    } catch (err) {
+      console.error("❌ inicializarConfigLGPD:", err);
+      throw new functions.https.HttpsError(
+        "internal",
+        "Erro ao inicializar ConfigLGPD"
+      );
+    }
   });
-});
+// ==============================
+// 🔐 GARANTIA AUTOMÁTICA NO DEPLOY
+// ==============================
+exports.garantirConfigLGPD = functions
+  .region("southamerica-east1")
+  .runWith({ timeoutSeconds: 60 })
+  .pubsub.schedule("every 24 hours")
+  .onRun(async () => {
+    try {
+      const r = await criarOuAtualizarConfigLGPD();
+      console.log("🛡️ garantirConfigLGPD:", r.status);
+    } catch (err) {
+      console.error("❌ garantirConfigLGPD:", err);
+    }
+  });
+  // ==============================
+// 👤 AO CRIAR USUÁRIO → GARANTE LGPD
+// ==============================
+exports.onUserCreateGarantirLGPD = functions
+  .region("southamerica-east1")
+  .auth.user()
+  .onCreate(async () => {
+    try {
+      const r = await criarOuAtualizarConfigLGPD();
+      console.log("👤 LGPD onCreate:", r.status);
+    } catch (err) {
+      console.error("❌ LGPD onCreate:", err);
+    }
+  });
+/* ===============================
+   registrarAceiteLgpd (OFICIAL)
+================================ */
+exports.registrarAceiteLgpd = functions
+  .region("southamerica-east1")
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        "unauthenticated",
+        "Usuário não autenticado"
+      );
+    }
+
+    try {
+      const uid = context.auth.uid;
+      const agora = admin.firestore.FieldValue.serverTimestamp();
+
+      // ==============================
+      // 🔒 GARANTE CONFIGURAÇÃO LGPD
+      // ==============================
+      await criarOuAtualizarConfigLGPD();
+
+      // ==============================
+      // Lê Configuração LGPD
+      // ==============================
+      const configRef = db.collection("ConfigLGPD").doc("ATUAL");
+      const configSnap = await configRef.get();
+
+      if (!configSnap.exists) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Configuração LGPD não encontrada."
+        );
+      }
+
+      const config = configSnap.data();
+
+      if (!config?.ativo) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Termo LGPD desativado"
+        );
+      }
+
+      const versao = String(config.versao || "1.0");
+      const origem = String(data?.origem || "desconhecida");
+      const device = String(data?.device || "unknown");
+
+      // ==============================
+      // IP e User-Agent
+      // ==============================
+      const ip =
+        context.rawRequest?.headers["x-forwarded-for"] ||
+        context.rawRequest?.ip ||
+        "0.0.0.0";
+
+      const userAgent =
+        context.rawRequest?.headers["user-agent"] || "unknown";
+
+      // ==============================
+      // Referência do usuário privado
+      // ==============================
+      const userRef = db.doc(`UsuariosPrivado/${uid}`);
+      const userSnap = await userRef.get();
+      const email = userSnap.exists
+        ? userSnap.data()?.email || "desconhecido"
+        : "desconhecido";
+
+      // ⛔ Já aceitou a mesma versão
+      if (
+        userSnap.exists &&
+        userSnap.data()?.consentimentoLGPD?.aceito === true &&
+        userSnap.data()?.consentimentoLGPD?.versao === versao
+      ) {
+        return { status: "already_accepted" };
+      }
+
+      // ==============================
+      // Hash de auditoria
+      // ==============================
+      const hash = crypto
+        .createHash("sha256")
+        .update(
+          `${uid}|${email}|${versao}|${origem}|${device}|${Date.now()}`
+        )
+        .digest("hex");
+
+      // ==============================
+      // Auditoria LGPD
+      // ==============================
+      await db.collection("AuditoriaLGPD").add({
+        uid,
+        email,
+        versao,
+        origem,
+        device,
+        ip,
+        userAgent,
+        aceitoEm: agora,
+        hash,
+      });
+
+      // ==============================
+      // Atualiza consentimento
+      // ==============================
+      await userRef.set(
+        {
+          consentimentoLGPD: {
+            aceito: true,
+            versao,
+            origem,
+            device,
+            aceitoEm: agora,
+          },
+        },
+        { merge: true }
+      );
+
+      return { status: "ok" };
+    } catch (err) {
+      console.error("❌ registrarAceiteLgpd:", err);
+
+      throw new functions.https.HttpsError(
+        "internal",
+        "Erro ao registrar aceite LGPD"
+      );
+    }
+  });
+
+
+ /* ===============================
+   gerarPdfLegal (LGPD)
+================================ */
+exports.gerarPdfLegal = functions
+  .region("southamerica-east1")
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        "unauthenticated",
+        "Usuário não autenticado"
+      );
+    }
+
+    const uid = context.auth.uid;
+
+    /* ===============================
+       BUSCA USUÁRIO
+    ================================ */
+    const userRef = db.collection("UsuariosPrivado").doc(uid);
+const userSnap = await userRef.get();
+
+if (!userSnap.exists || userSnap.data()?.lgpd?.aceito !== true) {
+  throw new functions.https.HttpsError(
+    "failed-precondition",
+    "LGPD não aceita"
+  );
+}
+
+const lgpd = userSnap.data().lgpd;
+const versaoTermo = lgpd.versao || "1.0";
+
+    /* ===============================
+       PREPARAÇÃO PDF
+    ================================ */
+    const pdfDoc = new PDFDocument({ size: "A4", margin: 50 });
+    const stream = new PassThrough();
+    pdfDoc.pipe(stream);
+
+    /* ===============================
+       CABEÇALHO
+    ================================ */
+    pdfDoc
+      .fontSize(18)
+      .text("TERMO DE CONSENTIMENTO LGPD", { align: "center" })
+      .moveDown(1);
+
+    pdfDoc
+      .fontSize(11)
+      .text(`Versão do termo: ${versaoTermo}`, { align: "center" })
+      .moveDown(2);
+
+    pdfDoc
+      .fontSize(12)
+      .text(
+        "Este documento comprova o consentimento expresso do titular para o tratamento de dados pessoais, conforme a Lei Geral de Proteção de Dados (Lei nº 13.709/2018).",
+        { align: "justify" }
+      )
+      .moveDown(2);
+
+    /* ===============================
+       DADOS DO TITULAR
+    ================================ */
+    pdfDoc.fontSize(12);
+    pdfDoc.text(`Nome: ${user.nome || "Não informado"}`);
+    pdfDoc.text(`Email: ${user.email || "Não informado"}`);
+    pdfDoc.text(`UID: ${uid}`);
+
+    const aceiteEm = user.consentimentoLGPD.aceitoEm?.toDate
+      ? user.consentimentoLGPD.aceitoEm.toDate().toLocaleString("pt-BR")
+      : "Data indisponível";
+
+    pdfDoc.text(`Data do aceite: ${aceiteEm}`);
+    pdfDoc.text(`Endereço IP: ${user.consentimentoLGPD.ip || "Não informado"}`);
+    pdfDoc.text(
+      `Dispositivo: ${user.consentimentoLGPD.device || "Não informado"}`
+    );
+
+    pdfDoc.moveDown(2);
+
+    /* ===============================
+       TEXTO LEGAL
+    ================================ */
+    pdfDoc.fontSize(11).text(
+      `
+O titular declara ciência e concordância com a coleta, armazenamento,
+tratamento e eventual compartilhamento de seus dados pessoais, estritamente
+para fins operacionais, de segurança, antifraude, financeiros e cumprimento
+de obrigações legais e regulatórias.
+
+Os dados não serão comercializados, nem utilizados para finalidades diversas
+das aqui descritas, exceto quando exigido por autoridade legal competente.
+
+Este consentimento poderá ser revogado a qualquer momento, respeitadas as
+obrigações legais aplicáveis.
+      `,
+      { align: "justify" }
+    );
+
+    pdfDoc.moveDown(3);
+
+    /* ===============================
+       ASSINATURA DIGITAL
+    ================================ */
+    const assinaturaDigital = `${uid.substring(0, 8)}-${Date.now()}`;
+
+    pdfDoc.fontSize(11).text(`Assinatura digital: ${assinaturaDigital}`);
+    pdfDoc.moveDown(1);
+
+    pdfDoc.text(
+      "Documento gerado automaticamente pelo sistema, com validade jurídica.",
+      { align: "center" }
+    );
+
+    pdfDoc.end();
+
+    /* ===============================
+       COLETA PDF + HASH
+    ================================ */
+    const chunks = [];
+    stream.on("data", (chunk) => chunks.push(chunk));
+
+    return new Promise((resolve, reject) => {
+      stream.on("end", async () => {
+        try {
+          const pdfBuffer = Buffer.concat(chunks);
+
+          const hash = crypto
+            .createHash("sha256")
+            .update(pdfBuffer)
+            .digest("hex");
+
+          /* ===============================
+             SALVAR NO STORAGE
+          ================================ */
+          const bucket = admin.storage().bucket();
+          const filePath = `lgpd/${uid}/termo-v${versaoTermo}-${Date.now()}.pdf`;
+
+          await bucket.file(filePath).save(pdfBuffer, {
+            contentType: "application/pdf",
+            metadata: {
+              metadata: {
+                uid,
+                versao: versaoTermo,
+                hash,
+              },
+            },
+          });
+
+          /* ===============================
+             REGISTRO HISTÓRICO
+          ================================ */
+          await db.collection("HistoricoLGPD").add({
+            uid,
+            versao: versaoTermo,
+            hashPdf: hash,
+            storagePath: filePath,
+            ip: user.consentimentoLGPD.ip || null,
+            device: user.consentimentoLGPD.device || null,
+            criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+          resolve({
+            base64: pdfBuffer.toString("base64"), // mantém compatibilidade
+            hash,
+            versao: versaoTermo,
+            nomeArquivo: `termo-lgpd-${uid}.pdf`,
+            mimeType: "application/pdf",
+          });
+        } catch (err) {
+          console.error("Erro PDF LGPD:", err);
+          reject(
+            new functions.https.HttpsError(
+              "internal",
+              "Erro ao gerar documento LGPD"
+            )
+          );
+        }
+      });
+
+      stream.on("error", (err) => {
+        console.error("Stream PDF:", err);
+        reject(
+          new functions.https.HttpsError(
+            "internal",
+            "Erro no stream do PDF"
+          )
+        );
+      });
+    });
+  });

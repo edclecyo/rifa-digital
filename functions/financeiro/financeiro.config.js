@@ -1,0 +1,7 @@
+module.exports = {
+  VALOR_CARTELA: 2.5,
+  FUNDO_PREMIO: 2.0,
+  VALOR_INDICACAO: 0.25,
+  CUSTO_APP: 0.25,
+  LUCRO_PLATAFORMA: 1.0,
+};

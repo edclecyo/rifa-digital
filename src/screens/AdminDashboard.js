@@ -1,7 +1,14 @@
 import { View, Text, Dimensions, FlatList } from 'react-native';
 import { useEffect, useState, useContext } from 'react';
 import { db } from '../services/firebase';
-import { doc, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
+import {
+  doc,
+  onSnapshot,
+  collection,
+  query,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
 import { AuthContext } from '../contexts/AuthContext';
 import Svg, { Rect } from 'react-native-svg';
 
@@ -24,10 +31,13 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!isAdmin) return;
 
-    // 🔹 Estatísticas globais
+    /* ===============================
+       🔹 Estatísticas globais
+    ================================ */
     const refStats = doc(db, 'StatusGlobal', 'geral');
     const unsubStats = onSnapshot(refStats, (snap) => {
       if (!snap.exists()) return;
+
       const data = snap.data() || {};
       const total = data.totalCartelas || 0;
       const vendidas = data.cartelasVendidas || 0;
@@ -44,7 +54,9 @@ export default function AdminDashboard() {
       });
     });
 
-    // 🔹 Ranking de usuários por cartelas compradas
+    /* ===============================
+       🔹 Ranking de compradores
+    ================================ */
     const qRanking = query(
       collection(db, 'RankingCompradores'),
       orderBy('quantidade', 'desc'),
@@ -58,12 +70,13 @@ export default function AdminDashboard() {
         quantidade: d.data().quantidade || 0,
         total: d.data().total || 0,
       }));
+
       setRankingUsuarios(ranking);
     });
 
     return () => {
-      unsubStats();
-      unsubRanking();
+      if (typeof unsubStats === 'function') unsubStats();
+      if (typeof unsubRanking === 'function') unsubRanking();
     };
   }, [isAdmin]);
 
@@ -95,7 +108,15 @@ export default function AdminDashboard() {
         }}
       >
         <Text style={{ color: '#cbd5f5', fontSize: 14 }}>{title}</Text>
-        <Text style={{ color: '#fff', fontSize: 26, fontWeight: 'bold' }}>{value}</Text>
+        <Text
+          style={{
+            color: '#fff',
+            fontSize: 26,
+            fontWeight: 'bold',
+          }}
+        >
+          {value}
+        </Text>
       </View>
     );
   }
@@ -106,7 +127,14 @@ export default function AdminDashboard() {
       keyExtractor={(item) => item.id}
       ListHeaderComponent={
         <View>
-          <Text style={{ fontSize: 26, fontWeight: 'bold', color: '#fff', marginBottom: 20 }}>
+          <Text
+            style={{
+              fontSize: 26,
+              fontWeight: 'bold',
+              color: '#fff',
+              marginBottom: 20,
+            }}
+          >
             📊 Dashboard Global
           </Text>
 
@@ -114,16 +142,32 @@ export default function AdminDashboard() {
           <Card title="Cartelas Vendidas" value={stats.cartelasVendidas} />
           <Card title="Cartelas Reservadas" value={stats.cartelasReservadas} />
           <Card title="Cartelas Disponíveis" value={stats.cartelasDisponiveis} />
-          <Card title="Faturamento (R$)" value={Number(stats.faturamento).toFixed(2)} />
+          <Card
+            title="Faturamento (R$)"
+            value={Number(stats.faturamento).toFixed(2)}
+          />
           <Card title="Usuários Cadastrados" value={stats.usuarios} />
 
-          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', marginVertical: 16 }}>
+          <Text
+            style={{
+              color: '#fff',
+              fontSize: 18,
+              fontWeight: 'bold',
+              marginVertical: 16,
+            }}
+          >
             📈 Progresso de Vendas
           </Text>
 
           <Svg height="40" width={WIDTH}>
             <Rect x="0" y="0" width={vendidasPct} height="40" fill="#16a34a" />
-            <Rect x={vendidasPct} y="0" width={reservadasPct} height="40" fill="#fde68a" />
+            <Rect
+              x={vendidasPct}
+              y="0"
+              width={reservadasPct}
+              height="40"
+              fill="#fde68a"
+            />
             <Rect
               x={vendidasPct + reservadasPct}
               y="0"
@@ -133,10 +177,22 @@ export default function AdminDashboard() {
             />
           </Svg>
 
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-            <Text style={{ color: '#16a34a' }}>Vendidas: {stats.cartelasVendidas}</Text>
-            <Text style={{ color: '#fde68a' }}>Reservadas: {stats.cartelasReservadas}</Text>
-            <Text style={{ color: '#cbd5f5' }}>Disponíveis: {stats.cartelasDisponiveis}</Text>
+          <View
+            style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              marginTop: 8,
+            }}
+          >
+            <Text style={{ color: '#16a34a' }}>
+              Vendidas: {stats.cartelasVendidas}
+            </Text>
+            <Text style={{ color: '#fde68a' }}>
+              Reservadas: {stats.cartelasReservadas}
+            </Text>
+            <Text style={{ color: '#cbd5f5' }}>
+              Disponíveis: {stats.cartelasDisponiveis}
+            </Text>
           </View>
 
           <Text
@@ -163,11 +219,18 @@ export default function AdminDashboard() {
           <Text style={{ color: '#fff', fontWeight: 'bold' }}>
             {index + 1}º {item.nome}
           </Text>
-          <Text style={{ color: '#cbd5f5' }}>🎟️ Cartelas: {item.quantidade}</Text>
-          <Text style={{ color: '#22c55e' }}>💰 Total: R$ {Number(item.total).toFixed(2)}</Text>
+          <Text style={{ color: '#cbd5f5' }}>
+            🎟️ Cartelas: {item.quantidade}
+          </Text>
+          <Text style={{ color: '#22c55e' }}>
+            💰 Total: R$ {Number(item.total).toFixed(2)}
+          </Text>
         </View>
       )}
-      contentContainerStyle={{ padding: 20, backgroundColor: '#0f172a' }}
+      contentContainerStyle={{
+        padding: 20,
+        backgroundColor: '#0f172a',
+      }}
     />
   );
 }

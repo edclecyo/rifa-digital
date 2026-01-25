@@ -16,12 +16,36 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // ✅ Identificador do dispositivo
-  const deviceId = Platform.OS === 'android'
-    ? Application.getAndroidId?.() ?? 'android-emulator'
-    : Application.getIosIdForVendor?.() ?? 'ios-simulator';
+  // 🔐 LGPD
+  const [lgpdAceita, setLgpdAceita] = useState(false);
+  const [lgpdVersao, setLgpdVersao] = useState(null);
 
-  // Configura canal Android para notificações
+  // 📱 Device ID (async)
+  const [deviceId, setDeviceId] = useState(null);
+
+  /* ===============================
+     DEVICE ID
+  ================================ */
+  useEffect(() => {
+    async function loadDeviceId() {
+      try {
+        if (Platform.OS === 'android') {
+          const id = await Application.getAndroidIdAsync();
+          setDeviceId(id ?? 'android-emulator');
+        } else {
+          const id = await Application.getIosIdForVendorAsync();
+          setDeviceId(id ?? 'ios-simulator');
+        }
+      } catch {
+        setDeviceId('unknown-device');
+      }
+    }
+    loadDeviceId();
+  }, []);
+
+  /* ===============================
+     NOTIFICAÇÕES
+  ================================ */
   async function configureAndroidChannel() {
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('default', {
@@ -31,15 +55,14 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // Registrar push token
   async function registerForPushNotifications(uid) {
     try {
       const { status } = await Notifications.getPermissionsAsync();
       let finalStatus = status;
 
       if (status !== 'granted') {
-        const request = await Notifications.requestPermissionsAsync();
-        finalStatus = request.status;
+        const req = await Notifications.requestPermissionsAsync();
+        finalStatus = req.status;
       }
 
       if (finalStatus !== 'granted') return;
@@ -63,86 +86,167 @@ export function AuthProvider({ children }) {
         { merge: true }
       );
     } catch (err) {
-      console.error('❌ Erro Push Token:', err);
+      console.error('❌ Push Token:', err);
     }
   }
 
-  // Registrar login via Cloud Function
-  async function registrarLogin() {
-    try {
-      // ⚠️ Região da função, ajuste se necessário
-      const call = httpsCallable(functions, 'registrarLogin', { region: 'southamerica-east1' });
 
-      // Força valores mesmo no emulador
-      const payload = {
-        deviceId: deviceId ?? 'emulator-device',
-        platform: Platform.OS ?? 'unknown',
-      };
+  /* ===============================
+     🔄 CARREGAR LGPD
+  ================================ */
+  async function carregarLgpd(uid) {
+  try {
+    const snap = await getDoc(doc(db, "Usuarios", uid));
 
-      const res = await call(payload);
-      console.log('✅ registrarLogin ok:', res.data);
-    } catch (err) {
-      if (err?.code === 'functions/not-found') {
-        console.warn('⚠️ registrarLogin ainda não disponível');
-        return;
-      }
-
-      if (err?.code === 'functions/permission-denied') {
-        console.warn('⚠️ Sessão inválida ou sem permissão, deslogando...');
-        await signOut(auth);
-        return;
-      }
-
-      console.error('❌ Erro registrarLogin:', err);
+    if (!snap.exists()) {
+      setLgpdAceita(false);
+      return false;
     }
+
+    const consentimento = snap.data()?.consentimentoLGPD;
+
+    const aceita = consentimento?.aceito === true;
+
+    setLgpdAceita(aceita);
+    return aceita;
+  } catch (err) {
+    console.error("❌ Erro carregar LGPD:", err);
+    setLgpdAceita(false);
+    return false;
   }
+}
 
-  // Monitorar auth state
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
-      if (!authUser) {
-        setUser(null);
-        setProfile(null);
-        setIsAdmin(false);
-        setLoading(false);
-        return;
-      }
+  /* ===============================
+     🔄 REFRESH LGPD (usado no Modal)
+  ================================ */
+  async function refreshLgpd(uid) {
+  const snap = await getDoc(doc(db, "Usuarios", uid));
 
-      try {
-        // 🔐 Verifica se é admin
-        const tokenResult = await getIdTokenResult(authUser, true);
-        setIsAdmin(tokenResult.claims?.admin === true);
+  const aceita =
+    snap.exists() &&
+    snap.data()?.consentimentoLGPD?.aceito === true;
 
-        // 🔎 Pega dados do perfil
-        const snap = await getDoc(doc(db, 'Usuarios', authUser.uid));
-        setProfile(snap.exists() ? snap.data() : null);
+  setLgpdAceita(aceita);
+}
+ /* ===============================
+     aceitarLgpd
+  ================================ */
+async function aceitarLgpd(uid, versao) {
+  try {
+    await setDoc(
+      doc(db, "Usuarios", uid),
+      {
+        consentimentoLGPD: {
+          aceito: true,
+          versao,
+          aceitoEm: serverTimestamp(),
+          deviceId,
+          platform: Platform.OS,
+        },
+      },
+      { merge: true }
+    );
 
-        setUser(authUser);
-
-        // 🚀 Primeiro registra push token
-        await registerForPushNotifications(authUser.uid);
-
-        // 🚀 Depois registra login no backend
-        await registrarLogin();
-      } catch (err) {
-        console.error('❌ Erro AuthContext:', err);
-      } finally {
-        setLoading(false);
-      }
+    // 🔍 LOG JURÍDICO (auditoria)
+    await setDoc(doc(db, "LgpdAuditoria", `${uid}_${Date.now()}`), {
+      uid,
+      versao,
+      aceitoEm: serverTimestamp(),
+      deviceId,
+      platform: Platform.OS,
     });
 
-    return unsubscribe;
-  }, []);
+    await refreshLgpd(uid);
+  } catch (err) {
+    console.error("❌ Erro aceitar LGPD:", err);
+    throw err;
+  }
+}
+  /* ===============================
+     LOGIN BACKEND
+  ================================ */
+  async function registrarLogin() {
+    try {
+      const call = httpsCallable(functions, 'registrarLogin');
 
+      await call({
+        deviceId: deviceId ?? 'emulator',
+        platform: Platform.OS ?? 'unknown',
+      });
+    } catch (err) {
+      if (err?.code === 'functions/permission-denied') {
+        await signOut(auth);
+      }
+      console.warn('⚠️ registrarLogin:', err?.code);
+    }
+  }
+
+  /* ===============================
+     AUTH STATE
+  ================================ */
+  useEffect(() => {
+  const unsub = onAuthStateChanged(auth, async (authUser) => {
+    if (!authUser) {
+      setUser(null);
+      setProfile(null);
+      setIsAdmin(false);
+      setLgpdAceita(false);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true); // 🔒 trava tudo aqui
+
+      const token = await getIdTokenResult(authUser, true);
+      setIsAdmin(token.claims?.admin === true);
+
+      const snap = await getDoc(doc(db, "Usuarios", authUser.uid));
+      setProfile(snap.exists() ? snap.data() : {});
+
+      setUser(authUser);
+
+      // ✅ AGUARDA LGPD
+      await carregarLgpd(authUser.uid);
+
+      // 🔕 não precisa travar UI
+      registerForPushNotifications(authUser.uid);
+      registrarLogin();
+    } catch (err) {
+      console.error("❌ AuthContext:", err);
+    } finally {
+      setLoading(false); // 🔓 só libera depois da LGPD
+    }
+  });
+
+  return unsub;
+}, [deviceId]);
+
+  /* ===============================
+     🚪 LOGOUT
+  ================================ */
   async function logout() {
     await signOut(auth);
     setUser(null);
     setProfile(null);
     setIsAdmin(false);
+    setLgpdAceita(false);
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, isAdmin, logout }}>
+    <AuthContext.Provider
+  value={{
+    user,
+    profile,
+    loading,
+    isAdmin,
+    lgpdAceita,
+    lgpdPendente: !!user && !lgpdAceita,
+    refreshLgpd,
+    aceitarLgpd, // ✅ AGORA SIM
+    logout,
+  }}
+>
       {children}
     </AuthContext.Provider>
   );
