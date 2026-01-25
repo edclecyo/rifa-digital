@@ -96,7 +96,7 @@ export function AuthProvider({ children }) {
   ================================ */
   async function carregarLgpd(uid) {
   try {
-    const snap = await getDoc(doc(db, "Usuarios", uid));
+    const snap = await getDoc(doc(db, "UsuariosPrivado", uid));
 
     if (!snap.exists()) {
       setLgpdAceita(false);
@@ -104,7 +104,6 @@ export function AuthProvider({ children }) {
     }
 
     const consentimento = snap.data()?.consentimentoLGPD;
-
     const aceita = consentimento?.aceito === true;
 
     setLgpdAceita(aceita);
@@ -120,7 +119,7 @@ export function AuthProvider({ children }) {
      🔄 REFRESH LGPD (usado no Modal)
   ================================ */
   async function refreshLgpd(uid) {
-  const snap = await getDoc(doc(db, "Usuarios", uid));
+  const snap = await getDoc(doc(db, "UsuariosPrivado", uid));
 
   const aceita =
     snap.exists() &&
@@ -128,40 +127,7 @@ export function AuthProvider({ children }) {
 
   setLgpdAceita(aceita);
 }
- /* ===============================
-     aceitarLgpd
-  ================================ */
-async function aceitarLgpd(uid, versao) {
-  try {
-    await setDoc(
-      doc(db, "Usuarios", uid),
-      {
-        consentimentoLGPD: {
-          aceito: true,
-          versao,
-          aceitoEm: serverTimestamp(),
-          deviceId,
-          platform: Platform.OS,
-        },
-      },
-      { merge: true }
-    );
-
-    // 🔍 LOG JURÍDICO (auditoria)
-    await setDoc(doc(db, "LgpdAuditoria", `${uid}_${Date.now()}`), {
-      uid,
-      versao,
-      aceitoEm: serverTimestamp(),
-      deviceId,
-      platform: Platform.OS,
-    });
-
-    await refreshLgpd(uid);
-  } catch (err) {
-    console.error("❌ Erro aceitar LGPD:", err);
-    throw err;
-  }
-}
+ 
   /* ===============================
      LOGIN BACKEND
   ================================ */
@@ -243,7 +209,6 @@ async function aceitarLgpd(uid, versao) {
     lgpdAceita,
     lgpdPendente: !!user && !lgpdAceita,
     refreshLgpd,
-    aceitarLgpd, // ✅ AGORA SIM
     logout,
   }}
 >

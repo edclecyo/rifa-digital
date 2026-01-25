@@ -49,18 +49,15 @@ await setDoc(doc(db, "Usuarios", user.uid), {
   criadoEm: serverTimestamp(),
 });
 
-// 🔒 USUÁRIO PRIVADO
+/// 🔒 USUÁRIO PRIVADO (limpo)
 await setDoc(
   doc(db, "UsuariosPrivado", user.uid),
   {
-    lgpd: {
-      aceito: false,
-      versao: null,
-      aceitoEm: null,
-    },
     criadoEm: serverTimestamp(),
+    scoreAntifraude: 0,
+    bloqueado: false,
   },
-  { merge: true }
+  { merge: true } // mantém outros campos existentes, mas não adiciona lgpd desnecessário
 );
 
       Alert.alert("Sucesso", "Conta criada com sucesso!");

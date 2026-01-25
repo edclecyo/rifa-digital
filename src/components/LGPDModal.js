@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   Modal,
   View,
@@ -10,7 +10,6 @@ import {
   Platform,
 } from "react-native";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { functions } from "../services/firebase"; // ajuste o caminho se necessário
 
 export default function LGPDModal({ visible, onAceito }) {
   const [loading, setLoading] = useState(false);
@@ -18,6 +17,15 @@ export default function LGPDModal({ visible, onAceito }) {
   const scrollRef = useRef(null);
 
   const functionsSA = getFunctions(undefined, "southamerica-east1");
+
+  // 🔄 Reseta estado sempre que o modal abrir
+  useEffect(() => {
+    if (visible) {
+      setScrollFinal(false);
+      setLoading(false);
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
+    }
+  }, [visible]);
 
   async function aceitarLgpd() {
     if (!scrollFinal) {
@@ -36,20 +44,22 @@ export default function LGPDModal({ visible, onAceito }) {
         "registrarAceiteLgpd"
       );
 
-      // 🔹 Detecta device de forma segura
-      const device = typeof Platform !== "undefined" ? Platform.OS : "unknown";
+      const device =
+        typeof Platform !== "undefined" ? Platform.OS : "unknown";
 
       await registrarAceite({
         origem: "app",
         device,
       });
 
-      onAceito?.(); // dispara callback
+      // ✅ dispara callback para o PAI fechar o modal
+      onAceito?.(true);
     } catch (err) {
       console.error("❌ Erro aceitar LGPD:", err);
       Alert.alert(
         "Erro",
-        err?.message || "Não foi possível registrar o aceite. Tente novamente."
+        err?.message ||
+          "Não foi possível registrar o aceite. Tente novamente."
       );
     } finally {
       setLoading(false);
@@ -58,8 +68,10 @@ export default function LGPDModal({ visible, onAceito }) {
 
   function handleScroll({ nativeEvent }) {
     const { layoutMeasurement, contentOffset, contentSize } = nativeEvent;
+
     const chegouNoFim =
-      layoutMeasurement.height + contentOffset.y >= contentSize.height - 20;
+      layoutMeasurement.height + contentOffset.y >=
+      contentSize.height - 20;
 
     if (chegouNoFim) {
       setScrollFinal(true);

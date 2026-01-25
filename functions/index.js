@@ -1425,11 +1425,6 @@ exports.registrarAceiteLgpd = functions
       const agora = admin.firestore.FieldValue.serverTimestamp();
 
       // ==============================
-      // 🔒 GARANTE CONFIGURAÇÃO LGPD
-      // ==============================
-      await criarOuAtualizarConfigLGPD();
-
-      // ==============================
       // Lê Configuração LGPD
       // ==============================
       const configRef = db.collection("ConfigLGPD").doc("ATUAL");
@@ -1471,6 +1466,7 @@ exports.registrarAceiteLgpd = functions
       // ==============================
       const userRef = db.doc(`UsuariosPrivado/${uid}`);
       const userSnap = await userRef.get();
+
       const email = userSnap.exists
         ? userSnap.data()?.email || "desconhecido"
         : "desconhecido";

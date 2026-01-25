@@ -8,7 +8,8 @@ import AdminRoutes from "./AdminRoutes";
 import LGPDModal from "../components/LGPDModal";
 
 export default function Routes() {
-  const { user, loading, isAdmin, lgpdPendente } = useContext(AuthContext);
+  const { user, loading, isAdmin, lgpdPendente, refreshLgpd } =
+    useContext(AuthContext);
 
   if (loading) return null;
 
@@ -21,12 +22,12 @@ export default function Routes() {
       </NavigationContainer>
 
       {/* 🔒 LGPD SEMPRE POR CIMA */}
-     <LGPDModal
-  visible={lgpdPendente === true}
-  onAceito={async () => {
-    await refreshLgpd(); // 🔥 atualiza do Firestore
-  }}
-/>
+      <LGPDModal
+        visible={lgpdPendente === true}
+        onAceito={async () => {
+          await refreshLgpd(user.uid); // 🔥 ponto-chave
+        }}
+      />
     </>
   );
 }
