@@ -608,7 +608,68 @@ exports.workerProcessarPedido = functions.firestore
 
     await batch.commit();
   });
+/* ===============================
+   AO CRIAR USUÁRIO → MISSÃO + CÓDIGO COMPARTILHAMENTO SEGURO
+================================ */
+exports.onUserCreate = functions.auth.user().onCreate(async (user) => {
+  const uid = user.uid;
+  const agora = admin.firestore.Timestamp.now();
+  const expira = admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() + 24 * 60 * 60 * 1000) // +24h
+  );
 
+  // -------------------------------
+  // 1️⃣ Criar missão diária
+  // -------------------------------
+  const missaoRef = db.collection('MissoesAtivas').doc(uid);
+  await missaoRef.set({
+    meta: 3,
+    atual: 0,
+    recompensa: '1 cartela grátis',
+    tipo: 'diaria',
+    criadaEm: agora,
+    expiraEm: expira,
+  });
+
+  // -------------------------------
+  // 2️⃣ Gerar código sequencial de compartilhamento de forma segura
+  // -------------------------------
+  const contadorRef = db.collection("Contadores").doc("usuariosCompartilhamento");
+  let codigo = "";
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(contadorRef);
+    let proximo = 1;
+
+    if (snap.exists) {
+      proximo = (snap.data().ultimo || 0) + 1;
+    }
+
+    if (proximo > 1000000) {
+      throw new Error("Limite de códigos atingido (1 milhão)");
+    }
+
+    // Atualiza contador
+    tx.set(contadorRef, { ultimo: proximo }, { merge: true });
+
+    // Gera código formatado
+    codigo = `Rifa${String(proximo).padStart(6, "0")}`;
+
+    // Salva no usuário
+    const userRef = db.collection("UsuariosPrivado").doc(uid);
+    tx.set(userRef, {
+      compartilhamento: {
+        codigo,
+        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      saldo: 0,
+      scoreAntifraude: 0,
+      bloqueado: false,
+    }, { merge: true });
+  });
+
+  console.log(`🆕 Usuário ${uid} criado | Código de compartilhamento: ${codigo}`);
+});
 /* ===============================
    registrarCompartilhamentoAposCompra
 ================================ */
@@ -686,6 +747,134 @@ async function registrarCompartilhamentoAposCompra({ indicadoUid }) {
     );
   });
 }
+/* ===============================
+   Cloud Function: Registrar Bônus e Consolidar Saldo
+================================ */
+exports.registrarBonusConsolidado = functions
+  .runWith({ memory: "256MB", timeoutSeconds: 20 })
+  .https.onCall(async (data, context) => {
+    const { indicadoUid } = data;
+
+    if (!indicadoUid) throw new functions.https.HttpsError(
+      "invalid-argument",
+      "IndicadoUid é obrigatório"
+    );
+
+    const indicacaoRef = db.collection("Indicacoes").doc(indicadoUid);
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    try {
+      await db.runTransaction(async (tx) => {
+        const indicacaoSnap = await tx.get(indicacaoRef);
+        if (!indicacaoSnap.exists) return;
+
+        const indicacao = indicacaoSnap.data();
+        const { indicadorUid, pago } = indicacao;
+
+        // ⛔ Já pago ou autoindicação
+        if (pago === true || indicadorUid === indicadoUid) return;
+
+        // Checar limite diário
+        const diarioRef = db
+          .collection("IndicacoesDiarias")
+          .doc(`${indicadorUid}_${hoje}`);
+        const diarioSnap = await tx.get(diarioRef);
+        const totalPagoHoje = diarioSnap.exists ? diarioSnap.data().totalPago || 0 : 0;
+        if (totalPagoHoje >= 3) return;
+
+        const valorBonus = 0.25; // R$0,25 por indicação
+
+        const userRef = db.collection("UsuariosPrivado").doc(indicadorUid);
+        const userSnap = await tx.get(userRef);
+        if (!userSnap.exists) throw new Error("Usuário não encontrado");
+
+        const userData = userSnap.data();
+
+        // Atualiza saldo compartilhamento
+        const novoSaldoCompartilhamento = (userData.compartilhamento?.saldo || 0) + valorBonus;
+
+        // Atualiza saldo consolidado (saldoDeposito + premios + compartilhamento)
+        const saldoDisponivel =
+          (userData.saldo || 0) +
+          (userData.premios || 0) +
+          novoSaldoCompartilhamento;
+
+        // Atualiza dados do usuário
+        tx.update(userRef, {
+          "compartilhamento.saldo": novoSaldoCompartilhamento,
+          saldoDisponivel,
+          atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Atualizar controle diário
+        tx.set(
+          diarioRef,
+          {
+            indicadorUid,
+            data: hoje,
+            totalPago: totalPagoHoje + 1,
+            atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        // Marcar indicação como paga
+        tx.update(indicacaoRef, {
+          pago: true,
+          pagoEm: admin.firestore.FieldValue.serverTimestamp(),
+          valorPago: valorBonus,
+        });
+
+        // Criar Ledger Financeiro
+        const ledgerRef = userRef.collection("LedgerFinanceiro").doc();
+        tx.set(ledgerRef, {
+          tipo: "indicacao",
+          valor: valorBonus,
+          indicadoUid,
+          criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+
+      return { success: true, message: "Bônus registrado e saldo atualizado!" };
+    } catch (err) {
+      console.error(err);
+      throw new functions.https.HttpsError(
+        "internal",
+        "Erro ao registrar bônus e consolidar saldo"
+      );
+    }
+  });
+  exports.calcularSaldoDisponivel = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError("unauthenticated", "Usuário não autenticado.");
+  }
+
+  const uid = context.auth.uid;
+
+  // Pega dados privados do usuário
+  const userRef = db.collection("UsuariosPrivado").doc(uid);
+  const userSnap = await userRef.get();
+
+  if (!userSnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Usuário não encontrado.");
+  }
+
+  const userData = userSnap.data();
+
+  // Saldo de depósito
+  const saldoDeposito = userData.saldo || 0;
+
+  // Saldo de compartilhamento
+  const saldoCompartilhamento = (userData.compartilhamento?.saldo || 0);
+
+  // Saldo de prêmios
+  const saldoPremios = (userData.premios?.saldo || 0);
+
+  // Calcula saldo disponível total
+  const saldoDisponivel = saldoDeposito + saldoCompartilhamento + saldoPremios;
+
+  return { saldoDisponivel };
+});
 /* ===============================
    ATUALIZAR RANKING
 ================================ */
@@ -1410,6 +1599,9 @@ exports.onUserCreateGarantirLGPD = functions
 /* ===============================
    registrarAceiteLgpd (OFICIAL)
 ================================ */
+/* ===============================
+   registrarAceiteLgpd (COMPLETA)
+================================ */
 exports.registrarAceiteLgpd = functions
   .region("southamerica-east1")
   .https.onCall(async (data, context) => {
@@ -1438,7 +1630,6 @@ exports.registrarAceiteLgpd = functions
       }
 
       const config = configSnap.data();
-
       if (!config?.ativo) {
         throw new functions.https.HttpsError(
           "failed-precondition",
@@ -1477,7 +1668,7 @@ exports.registrarAceiteLgpd = functions
         userSnap.data()?.consentimentoLGPD?.aceito === true &&
         userSnap.data()?.consentimentoLGPD?.versao === versao
       ) {
-        return { status: "already_accepted" };
+        return { status: "already_accepted", versao };
       }
 
       // ==============================
@@ -1485,9 +1676,7 @@ exports.registrarAceiteLgpd = functions
       // ==============================
       const hash = crypto
         .createHash("sha256")
-        .update(
-          `${uid}|${email}|${versao}|${origem}|${device}|${Date.now()}`
-        )
+        .update(`${uid}|${versao}|${Date.now()}|${ip}|${device}`)
         .digest("hex");
 
       // ==============================
@@ -1505,26 +1694,26 @@ exports.registrarAceiteLgpd = functions
         hash,
       });
 
+    // ==============================
+      // Salva consentimento no usuário
       // ==============================
-      // Atualiza consentimento
-      // ==============================
-      await userRef.set(
-        {
-          consentimentoLGPD: {
-            aceito: true,
-            versao,
-            origem,
-            device,
-            aceitoEm: agora,
-          },
+      await userRef.set({
+        consentimentoLGPD: {
+          aceito: true,
+          versao,
+          dataAceite: agora,
+          origem,
+          device,
+          ip,
+          userAgent,
+          hashAuditoria: hash,
         },
-        { merge: true }
-      );
+      }, { merge: true });
 
-      return { status: "ok" };
+      return { status: "accepted", versao, hash };
+
     } catch (err) {
       console.error("❌ registrarAceiteLgpd:", err);
-
       throw new functions.https.HttpsError(
         "internal",
         "Erro ao registrar aceite LGPD"

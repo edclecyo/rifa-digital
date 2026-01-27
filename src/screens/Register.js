@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -9,15 +9,25 @@ import {
   StyleSheet,
 } from "react-native";
 import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
-import { auth, db, functions } from "../services/firebase";
+import { auth, db } from "../services/firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
+import { useRoute } from "@react-navigation/native";
 
 export default function Register() {
+  const route = useRoute();
+
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
+  const [codigoConvite, setCodigoConvite] = useState("");
   const [loading, setLoading] = useState(false);
+
+  /* 🔗 CAPTURA CÓDIGO DO DEEP LINK */
+  useEffect(() => {
+    if (route.params?.codigo) {
+      setCodigoConvite(route.params.codigo);
+    }
+  }, [route.params]);
 
   async function handleRegister() {
     if (!nome || !email || !senha) {
@@ -28,37 +38,46 @@ export default function Register() {
     setLoading(true);
 
     try {
-      // 🔐 CRIA USUÁRIO
-const cred = await createUserWithEmailAndPassword(
-  auth,
-  email.trim(),
-  senha
-);
+      /* 🔐 CRIA USUÁRIO */
+      const cred = await createUserWithEmailAndPassword(
+        auth,
+        email.trim(),
+        senha
+      );
 
-const user = cred.user;
+      const user = cred.user;
 
-// 👤 DISPLAY NAME
-await updateProfile(user, { displayName: nome });
+      /* 👤 DISPLAY NAME */
+      await updateProfile(user, { displayName: nome });
 
-// 📄 USUÁRIO PÚBLICO
-await setDoc(doc(db, "Usuarios", user.uid), {
-  uid: user.uid,
-  nome,
-  email: user.email,
-  tipo: "user",
-  criadoEm: serverTimestamp(),
-});
+      /* 📄 USUÁRIO PÚBLICO */
+      await setDoc(doc(db, "Usuarios", user.uid), {
+        uid: user.uid,
+        nome,
+        email: user.email,
+        tipo: "user",
+        criadoEm: serverTimestamp(),
 
-/// 🔒 USUÁRIO PRIVADO (limpo)
-await setDoc(
-  doc(db, "UsuariosPrivado", user.uid),
-  {
-    criadoEm: serverTimestamp(),
-    scoreAntifraude: 0,
-    bloqueado: false,
-  },
-  { merge: true } // mantém outros campos existentes, mas não adiciona lgpd desnecessário
-);
+        // 🔗 CONVITE
+        codigoConvite: codigoConvite || null,
+        conviteValidado: false,
+
+        compartilhamento: {
+          codigo: null,
+          uso: 0,
+        },
+      });
+
+      /* 🔒 USUÁRIO PRIVADO */
+      await setDoc(
+        doc(db, "UsuariosPrivado", user.uid),
+        {
+          criadoEm: serverTimestamp(),
+          bloqueado: false,
+          scoreAntifraude: 0,
+        },
+        { merge: true }
+      );
 
       Alert.alert("Sucesso", "Conta criada com sucesso!");
     } catch (err) {
@@ -80,6 +99,12 @@ await setDoc(
     <View style={styles.container}>
       <View style={styles.card}>
         <Text style={styles.title}>Criar Conta</Text>
+
+        {codigoConvite ? (
+          <Text style={styles.convite}>
+            🎁 Código aplicado: {codigoConvite}
+          </Text>
+        ) : null}
 
         <TextInput
           placeholder="Nome"
@@ -144,7 +169,13 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#fff",
     textAlign: "center",
-    marginBottom: 24,
+    marginBottom: 16,
+  },
+  convite: {
+    color: "#facc15",
+    textAlign: "center",
+    marginBottom: 12,
+    fontWeight: "600",
   },
   input: {
     backgroundColor: "#020617",
