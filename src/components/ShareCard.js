@@ -1,24 +1,25 @@
 import { View, Text, Pressable, ToastAndroid, Platform } from "react-native";
 import Clipboard from "@react-native-clipboard/clipboard";
 
-export default function ShareCard({
-  codigo,
-  uso = 0,
-  onCompartilhar,
-}) {
+export default function ShareCard({ codigo, uso = 0, onCompartilhar }) {
   if (!codigo) return null;
 
-  // 馃幆 progresso simb贸lico (gamificado)
   const progresso = Math.min(uso * 10, 100);
 
+  // Copiar LINK COMPLETO
   function copiarCodigo() {
-    Clipboard.setString(codigo);
-
+    const link = `https://rifa-digital-f6425.web.app/ref?code=${codigo}`;
+    Clipboard.setString(link);
     if (Platform.OS === "android") {
-      ToastAndroid.show("C贸digo copiado! 馃搵", ToastAndroid.SHORT);
+      ToastAndroid.show("Link copiado! ??", ToastAndroid.SHORT);
     } else {
-      alert("C贸digo copiado! 馃搵");
+      alert("Link copiado! ??");
     }
+  }
+
+  // Compartilhar link
+  function compartilhar() {
+    if (onCompartilhar) onCompartilhar();
   }
 
   return (
@@ -36,78 +37,28 @@ export default function ShareCard({
         elevation: 6,
       }}
     >
-      {/* 馃敟 T脥TULO */}
-      <Text
-        style={{
-          color: "#fff",
-          fontSize: 20,
-          fontWeight: "bold",
-          marginBottom: 10,
-          textAlign: "center",
-        }}
-      >
-        馃殌 Convide amigos e suba no ranking
+      <Text style={{ color: "#fff", fontSize: 20, fontWeight: "bold", marginBottom: 10, textAlign: "center" }}>
+        ?? Convide amigos e suba no ranking
       </Text>
 
-      {/* 馃З C脫DIGO */}
-      <Text
-        style={{
-          color: "#facc15",
-          fontSize: 28,
-          fontWeight: "bold",
-          marginBottom: 12,
-          letterSpacing: 1,
-        }}
-      >
+      <Text style={{ color: "#facc15", fontSize: 28, fontWeight: "bold", marginBottom: 12, letterSpacing: 1 }}>
         {codigo}
       </Text>
 
-      {/* 馃 TEXTO GAMIFICADO (SEM PROMESSA FALSA) */}
-      <Text
-        style={{
-          color: "#e5e7eb",
-          fontSize: 14,
-          textAlign: "center",
-          marginBottom: 16,
-          lineHeight: 20,
-        }}
-      >
-        Cada novo usu谩rio com seu c贸digo fortalece sua posi莽茫o{"\n"}
+      <Text style={{ color: "#e5e7eb", fontSize: 14, textAlign: "center", marginBottom: 16, lineHeight: 20 }}>
+        Cada novo usuário com seu código fortalece sua posi??o{"\n"}
         Compartilhe, avance e domine o ranking
       </Text>
 
-      {/* 馃搳 BARRA DE PROGRESSO */}
       <View style={{ width: "100%", marginBottom: 16 }}>
-        <View
-          style={{
-            height: 10,
-            backgroundColor: "#334155",
-            borderRadius: 6,
-            overflow: "hidden",
-          }}
-        >
-          <View
-            style={{
-              width: `${progresso}%`,
-              height: "100%",
-              backgroundColor: "#facc15",
-            }}
-          />
+        <View style={{ height: 10, backgroundColor: "#334155", borderRadius: 6, overflow: "hidden" }}>
+          <View style={{ width: `${progresso}%`, height: "100%", backgroundColor: "#facc15" }} />
         </View>
-
-        <Text
-          style={{
-            color: "#cbd5f5",
-            fontSize: 12,
-            marginTop: 6,
-            textAlign: "center",
-          }}
-        >
-          {uso} pessoas j谩 entraram com seu c贸digo
+        <Text style={{ color: "#cbd5f5", fontSize: 12, marginTop: 6, textAlign: "center" }}>
+          {uso} pessoas já entraram com seu código
         </Text>
       </View>
 
-      {/* 馃幆 A脟脮ES */}
       <View style={{ flexDirection: "row", width: "100%" }}>
         <Pressable
           onPress={copiarCodigo}
@@ -120,13 +71,11 @@ export default function ShareCard({
             alignItems: "center",
           }}
         >
-          <Text style={{ color: "#fff", fontWeight: "bold" }}>
-            馃搵 Copiar
-          </Text>
+          <Text style={{ color: "#fff", fontWeight: "bold" }}>?? Copiar Link</Text>
         </Pressable>
 
         <Pressable
-          onPress={onCompartilhar}
+          onPress={compartilhar}
           style={{
             backgroundColor: "#ef4444",
             paddingVertical: 12,
@@ -136,9 +85,7 @@ export default function ShareCard({
             alignItems: "center",
           }}
         >
-          <Text style={{ color: "#fff", fontWeight: "bold" }}>
-            馃殌 Compartilhar
-          </Text>
+          <Text style={{ color: "#fff", fontWeight: "bold" }}>?? Compartilhar</Text>
         </Pressable>
       </View>
     </View>

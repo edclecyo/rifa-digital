@@ -1,0 +1,59 @@
+[debug] [2026-01-27T18:19:46.474Z] ----------------------------------------------------------------------
+[debug] [2026-01-27T18:19:46.476Z] Command:       C:\nvm4w\nodejs\node.exe C:\nvm4w\nodejs\node_modules\firebase-tools\lib\bin\firebase.js serve
+[debug] [2026-01-27T18:19:46.477Z] CLI Version:   15.3.1
+[debug] [2026-01-27T18:19:46.477Z] Platform:      win32
+[debug] [2026-01-27T18:19:46.477Z] Node Version:  v20.19.6
+[debug] [2026-01-27T18:19:46.477Z] Time:          Tue Jan 27 2026 15:19:46 GMT-0300 (Horário Padrão de Brasília)
+[debug] [2026-01-27T18:19:46.477Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-01-27T18:19:47.880Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-01-27T18:19:47.880Z] > authorizing via signed-in user (edclecyo12@gmail.com)
+[debug] [2026-01-27T18:19:47.881Z] [iam] checking project rifa-digital-f6425 for permissions ["firebase.projects.get"]
+[debug] [2026-01-27T18:19:47.882Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:47.882Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:47.883Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/rifa-digital-f6425:testIamPermissions [none]
+[debug] [2026-01-27T18:19:47.883Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/rifa-digital-f6425:testIamPermissions x-goog-quota-user=projects/rifa-digital-f6425
+[debug] [2026-01-27T18:19:47.884Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/rifa-digital-f6425:testIamPermissions {"permissions":["firebase.projects.get"]}
+[debug] [2026-01-27T18:19:48.859Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/rifa-digital-f6425:testIamPermissions 200
+[debug] [2026-01-27T18:19:48.859Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/rifa-digital-f6425:testIamPermissions {"permissions":["firebase.projects.get"]}
+[debug] [2026-01-27T18:19:48.860Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:48.860Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:48.860Z] >>> [apiv2][query] GET https://cloudresourcemanager.googleapis.com/v1/projects/rifa-digital-f6425 [none]
+[debug] [2026-01-27T18:19:49.104Z] <<< [apiv2][status] GET https://cloudresourcemanager.googleapis.com/v1/projects/rifa-digital-f6425 200
+[debug] [2026-01-27T18:19:49.104Z] <<< [apiv2][body] GET https://cloudresourcemanager.googleapis.com/v1/projects/rifa-digital-f6425 {"projectNumber":"763080965700","projectId":"rifa-digital-f6425","lifecycleState":"ACTIVE","name":"rifa-digital","labels":{"firebase":"enabled","firebase-core":"disabled"},"createTime":"2025-12-17T18:49:21.400610Z"}
+[info] 
+[info] === Serving from 'C:\Users\Edclecyo_ads\Desktop\rifa-digital'...
+[info] 
+[debug] [2026-01-27T18:19:49.109Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:49.110Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:49.118Z] >>> [apiv2][query] GET https://firebasehosting.googleapis.com/v1beta1/projects/rifa-digital-f6425/sites 
+[debug] [2026-01-27T18:19:50.322Z] <<< [apiv2][status] GET https://firebasehosting.googleapis.com/v1beta1/projects/rifa-digital-f6425/sites 200
+[debug] [2026-01-27T18:19:50.322Z] <<< [apiv2][body] GET https://firebasehosting.googleapis.com/v1beta1/projects/rifa-digital-f6425/sites {"sites":[{"name":"projects/rifa-digital-f6425/sites/rifa-digital-f6425","defaultUrl":"https://rifa-digital-f6425.web.app","type":"DEFAULT_SITE"}]}
+[debug] [2026-01-27T18:19:50.323Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:50.323Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:50.323Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425/webApps/-/config [none]
+[debug] [2026-01-27T18:19:51.641Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425/webApps/-/config 200
+[debug] [2026-01-27T18:19:51.641Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425/webApps/-/config {"projectId":"rifa-digital-f6425","appId":"1:763080965700:web:759c59dbc8e6a0e2080611","storageBucket":"rifa-digital-f6425.firebasestorage.app","apiKey":"AIzaSyDUga-GB_sOvvZd9kfwQGybx5I24kqLLgY","authDomain":"rifa-digital-f6425.firebaseapp.com","messagingSenderId":"763080965700","projectNumber":"763080965700","version":"2"}
+[debug] [2026-01-27T18:19:51.646Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:51.646Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:51.646Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425 [none]
+[debug] [2026-01-27T18:19:52.003Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425 200
+[debug] [2026-01-27T18:19:52.003Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425 {"projectId":"rifa-digital-f6425","projectNumber":"763080965700","displayName":"rifa-digital","name":"projects/rifa-digital-f6425","resources":{"hostingSite":"rifa-digital-f6425"},"state":"ACTIVE","etag":"1_f8792b15-944f-44f0-885b-7a6110f270e2"}
+[info] i  hosting[rifa-digital-f6425]: Serving hosting files from: dist {"metadata":{"emulator":{"name":"hosting"},"message":"Serving hosting files from: \u001b[1mdist\u001b[22m"}}
+[info] +  hosting[rifa-digital-f6425]: Local server: http://localhost:5002 {"metadata":{"emulator":{"name":"hosting"},"message":"Local server: \u001b[4m\u001b[1mhttp://localhost:5002\u001b[22m\u001b[24m"}}
+[debug] [2026-01-27T18:19:52.132Z] defaultcredentials: writing to file C:\Users\Edclecyo_ads\AppData\Roaming\firebase\edclecyo12_gmail_com_application_default_credentials.json
+[debug] [2026-01-27T18:19:52.137Z] Setting GAC to C:\Users\Edclecyo_ads\AppData\Roaming\firebase\edclecyo12_gmail_com_application_default_credentials.json {"metadata":{"emulator":{"name":"functions"},"message":"Setting GAC to C:\\Users\\Edclecyo_ads\\AppData\\Roaming\\firebase\\edclecyo12_gmail_com_application_default_credentials.json"}}
+[debug] [2026-01-27T18:19:52.137Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:52.137Z] Checked if tokens are valid: true, expires at: 1769540975811
+[debug] [2026-01-27T18:19:52.137Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425/adminSdkConfig [none]
+[debug] [2026-01-27T18:19:52.525Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425/adminSdkConfig 200
+[debug] [2026-01-27T18:19:52.525Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/rifa-digital-f6425/adminSdkConfig {"projectId":"rifa-digital-f6425","storageBucket":"rifa-digital-f6425.firebasestorage.app"}
+[debug] [2026-01-27T18:19:52.536Z] Error: listen EADDRINUSE: address already in use ::1:5001
+    at Server.setupListenHandle [as _listen2] (node:net:1908:16)
+    at listenInCluster (node:net:1965:12)
+    at GetAddrInfoReqWrap.doListen [as callback] (node:net:2139:7)
+    at GetAddrInfoReqWrap.onlookup [as oncomplete] (node:dns:113:8)
+[error] 
+[error] Error: An unexpected error has occurred.
+[info] i  functions: Watching "C:\Users\Edclecyo_ads\Desktop\rifa-digital\functions" for Cloud Functions... {"metadata":{"emulator":{"name":"functions"},"message":"Watching \"C:\\Users\\Edclecyo_ads\\Desktop\\rifa-digital\\functions\" for Cloud Functions..."}}
+[debug] [2026-01-27T18:19:52.543Z] Validating nodejs source

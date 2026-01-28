@@ -10,14 +10,14 @@ import LGPDModal from "../components/LGPDModal";
 
 /* 🔗 CONFIGURAÇÃO DE DEEP LINK */
 const linking = {
-  prefixes: ["rifa-digital--rifa-digital-f6425.us-central1.hosted.app"],
+  prefixes: [
+    "rifadigital://",
+    "https://rifa-digital-f6425.web.app",
+  ],
   config: {
     screens: {
       Registrar: {
         path: "register",
-        parse: {
-          codigo: (codigo) => codigo,
-        },
       },
     },
   },
