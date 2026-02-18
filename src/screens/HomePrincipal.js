@@ -29,6 +29,9 @@ import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { httpsCallable } from "firebase/functions";
 import { LinearGradient } from "expo-linear-gradient";
 
+import RoletaDiaria from "../components/RoletaDiaria";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 export default function HomePrincipal() {
   const { profile } = useContext(AuthContext);
   const navigation = useNavigation();
@@ -38,6 +41,7 @@ export default function HomePrincipal() {
   const [cartelasDisponiveis, setCartelasDisponiveis] = useState(0);
   const [ranking, setRanking] = useState([]);
   const [rodadaAtual, setRodadaAtual] = useState(1);
+  
   const [usuarioPrivado, setUsuarioPrivado] = useState({
     compartilhamento: { saldo: 0, codigo: "", uso: 0 },
     premios: 0,
@@ -50,16 +54,26 @@ export default function HomePrincipal() {
   const animatedPercent = useRef(new Animated.Value(0)).current;
 
   const META_MINIMA_SORTEIO = 10000; // Meta final
-  const PREMIO_ATUAL = 10000; // Valor final do prêmio
+  const PREMIO_ATUAL = 5000; // Valor final do prêmio
+  
+const [showRoleta, setShowRoleta] = useState(false);
 
+useEffect(() => {
+  async function verificarRoleta() {
+    const lastSpin = await AsyncStorage.getItem("@roleta_lastSpin");
+    const hoje = new Date().toDateString();
+    if (lastSpin !== hoje) setShowRoleta(true);
+  }
+  verificarRoleta();
+}, []);
   /* =================== ETAPAS DO PRÊMIO =================== */
   const ETAPAS_PREMIOS = [
-    { cartelas: 200, valor: 50 },
-    { cartelas: 300, valor: 100 },
-    { cartelas: 500, valor: 250 },
-    { cartelas: 1000, valor: 500 },
-    { cartelas: META_MINIMA_SORTEIO, valor: PREMIO_ATUAL },
-  ];
+  { cartelas: 200, valor: 50 },
+  { cartelas: 300, valor: 100 },
+  { cartelas: 500, valor: 250 },
+  { cartelas: 1000, valor: 500 },
+  { cartelas: META_MINIMA_SORTEIO, valor: PREMIO_ATUAL }, // 5.000
+];
 
   /* ================= RODADA ================= */
   useEffect(() => {
@@ -196,7 +210,15 @@ export default function HomePrincipal() {
     if (cartelas <= 3999) return ["#e5e7eb", "#d1d5db"];
     return ["#fbbf24", "#f59e0b"];
   }
-
+<RoletaDiaria
+  visible={showRoleta}
+  onClose={() => setShowRoleta(false)}
+  onPremio={(premio) => {
+    // Atualiza saldo ou cartelas
+    if (premio.tipo === "cartela") setCartelasDisponiveis(prev => prev + premio.valor);
+    if (premio.tipo === "dinheiro") setSaldo(prev => prev + premio.valor);
+  }}
+/>
   /* ================= UI ================= */
   return (
     <View style={{ flex: 1, backgroundColor: "#0f172a" }}>
@@ -340,56 +362,58 @@ export default function HomePrincipal() {
         </Pressable>
 
         {/* COMPARTILHAR */}
-        <View style={{ marginTop: 20, padding: 16, borderRadius: 14, backgroundColor: "#1f2937", borderWidth: 2, borderColor: "#f59e0b" }}>
-          <Text style={{ color: "#f59e0b", fontSize: 22, fontWeight: "bold", textAlign: "center" }}>
-            🚀 Ganhe sem gastar nada!
-          </Text>
-          <Text style={{ color: "#fff", fontSize: 16, textAlign: "center", marginTop: 6 }}>
-            Compartilhe com seus amigos e cada amigo que comprar através do seu link te dá:
-          </Text>
+<View style={{ marginTop: 20, padding: 16, borderRadius: 14, backgroundColor: "#1f2937", borderWidth: 2, borderColor: "#f59e0b" }}>
+  <Text style={{ color: "#f59e0b", fontSize: 22, fontWeight: "bold", textAlign: "center" }}>
+    🚀 Ganhe sem gastar nada!
+  </Text>
+  <Text style={{ color: "#fff", fontSize: 16, textAlign: "center", marginTop: 6 }}>
+    Compartilhe com seus amigos e cada amigo que comprar através do seu link te dá:
+  </Text>
 
-          <View style={{ flexDirection: "row", justifyContent: "space-around", marginTop: 12 }}>
-            <View style={{ alignItems: "center" }}>
-              <Text style={{ color: "#34d399", fontSize: 28, fontWeight: "bold" }}>🎟️</Text>
-              <Text style={{ color: "#fff", fontSize: 14 }}>Cartelas grátis</Text>
-            </View>
-            <View style={{ alignItems: "center" }}>
-              <Text style={{ color: "#facc15", fontSize: 28, fontWeight: "bold" }}>💸</Text>
-              <Text style={{ color: "#fff", fontSize: 14 }}>R$0,25 por compra</Text>
-            </View>
-          </View>
+  <View style={{ flexDirection: "row", justifyContent: "space-around", marginTop: 12 }}>
+    <View style={{ alignItems: "center" }}>
+      <Text style={{ color: "#34d399", fontSize: 28, fontWeight: "bold" }}>🎟️</Text>
+      <Text style={{ color: "#fff", fontSize: 14 }}>Cartelas grátis</Text>
+    </View>
+    <View style={{ alignItems: "center" }}>
+      <Text style={{ color: "#facc15", fontSize: 28, fontWeight: "bold" }}>💸</Text>
+      <Text style={{ color: "#fff", fontSize: 14 }}>R$0,25 por compra</Text>
+    </View>
+  </View>
 
-          <Text style={{ color: "#fff", fontSize: 14, textAlign: "center", marginTop: 12 }}>
-            Quanto mais compartilhar, maior seu potencial de renda!
-          </Text>
+  {/* NOVO TEXTO DE GATILHO EMOCIONAL */}
+  <Text style={{ color: "#fff", fontSize: 14, textAlign: "center", marginTop: 12, fontWeight: "bold" }}>
+    ⚡ Quanto mais você compartilhar, maior seu potencial de ganhar até R$500!  
+  </Text>
 
-          <Pressable
-            onPress={handleCompartilhar}
-            style={{
-              marginTop: 16,
-              backgroundColor: "#f59e0b",
-              padding: 14,
-              borderRadius: 12,
-              alignItems: "center",
-            }}
-          >
-            <Text style={{ color: "#000", fontWeight: "bold", fontSize: 16 }}>📤 Compartilhar agora</Text>
-          </Pressable>
+  <Pressable
+    onPress={handleCompartilhar}
+    style={{
+      marginTop: 16,
+      backgroundColor: "#f59e0b",
+      padding: 14,
+      borderRadius: 12,
+      alignItems: "center",
+    }}
+  >
+    <Text style={{ color: "#000", fontWeight: "bold", fontSize: 16 }}>📤 Compartilhar agora</Text>
+  </Pressable>
 
-          {/* Barra de progresso de amigos comprando */}
-          <View style={{ marginTop: 16, height: 20, borderRadius: 12, overflow: "hidden", backgroundColor: "#374151" }}>
-            <Animated.View
-              style={{
-                height: "100%",
-                width: animatedWidth.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
-                backgroundColor: "#34d399",
-              }}
-            />
-          </View>
-          <Text style={{ color: "#fff", fontSize: 14, textAlign: "center", marginTop: 4 }}>
-            {`Já compraram: ${usuarioPrivado.compartilhamento.uso} amigos`}
-          </Text>
-        </View>
+  {/* Barra de progresso de amigos comprando */}
+  <View style={{ marginTop: 16, height: 20, borderRadius: 12, overflow: "hidden", backgroundColor: "#374151" }}>
+    <Animated.View
+      style={{
+        height: "100%",
+        width: animatedWidth.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
+        backgroundColor: "#34d399",
+      }}
+    />
+  </View>
+  <Text style={{ color: "#fff", fontSize: 14, textAlign: "center", marginTop: 4 }}>
+    {`Já compraram: ${usuarioPrivado.compartilhamento.uso} amigos`}
+  </Text>
+</View>
+
       </ScrollView>
     </View>
   );
