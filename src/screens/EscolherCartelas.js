@@ -98,10 +98,10 @@ export default function EscolherCartelas() {
     unsubCartelas.current?.();
 
     const q = query(
-      collection(db, 'Cartelas'),
-      where('rodada', '==', rodadaAtual),
-      where('status', 'in', ['disponivel', 'reservada', 'vendida'])
-    );
+  collection(db, 'Cartelas'),
+  where('rodada', '==', rodadaAtual),
+  where('status', 'in', ['disponivel', 'reservada', 'vendida']) // pega todas, não só vendidas
+);
 
     unsubCartelas.current = onSnapshot(q, (snap) => {
       setCartelasMap((prev) => {

@@ -21,33 +21,26 @@ const MP_ACCESS_TOKEN = "TEST-1979013561468328-120609-46c9306edddb678d5f2863a7ae
    CONFIGURAÇÕES
 ================================ */
 const SUPER_ADMIN_UID = "s7wrbiuWf0NQQOE82BFOnnWAW5n2";
-const TOTAL_CARTELAS = 1600;
-const NUMEROS_POR_CARTELA = 6;
-const LIMITE_BATCH = 500;
-const TEMPO_RESERVA_MS = 15 * 60 * 1000; // 15 minutos
-const VALOR_CARTELA = 2.5;
-
-// Versão inicial da configuração LGPD
-const VERSAO_INICIAL = "1.0";
-const VERSAO_ATUAL = "1.0";
-
-const REGRAS_PREMIOS = [
-  { limite: 200, valor: 50 },
-  { limite: 300, valor: 100 },
-  { limite: 500, valor: 250 },
-  { limite: 1000, valor: 500 },
-];
-
-const GRANDE_PREMIO = { cartelas: 10000, valor: 5000 };
-
 /* ===============================
-   METAS
+   CONFIGURAÇÕES DE RIFA
 ================================ */
-const METAS = [
-  { cartelas: 100, premio: 100, nivel: "vermelho" },
-  { cartelas: 500, premio: 500, nivel: "verde" },
-  { cartelas: 1000, premio: 1000, nivel: "dourado" },
+const VALOR_CARTELA = 2.5; // preço da cartela
+const PERCENTUAL_PREMIO = 0.8; // R$2 de 2,5 para premiação
+const PERCENTUAL_DESPESAS = 0.1; // R$0,25 para taxas
+const PERCENTUAL_COMPARTILHAMENTO = 0.1; // R$0,25 para compartilhamento
+
+// Mini prêmios progressivos
+const MINI_PREMIOS = [
+  { vendas: 200, premio: 50 },
+  { vendas: 300, premio: 100 },
+  { vendas: 500, premio: 250 },
+  { vendas: 1000, premio: 500 },
 ];
+
+// Prêmio máximo
+const VENDAS_PREMIO_MAXIMO = 10000;
+const PREMIO_MAXIMO = 5000;
+
 /* ===============================
    exigirAdmin
 ================================ */
@@ -643,7 +636,7 @@ exports.reservarCartelas = functions
     }
 
     const agora = Date.now();
-    const expiraEm = new Date(agora + 5 * 60 * 1000); // ⏱️ 5 minutos
+    const expiraEm = new Date(agora + 20 * 1000); // ⏱️ 20 segundos
 
     const reservaRef = db.collection("Reservas").doc();
 
@@ -935,20 +928,24 @@ exports.criarCheckout = functions
     };
   });
  /* ===============================
-     calcularScoreAntifraude
-  =============================== */
+   calcularScoreAntifraude
+================================ */
 async function calcularScoreAntifraude({ uid, ip, deviceId, valor }) {
   let score = 0;
 
   /* ===============================
      MUITAS COMPRAS RÁPIDAS
   =============================== */
-  const comprasRecentes = await db.collection("Pedidos")
+  const cincoMinutos = Date.now() - 5 * 60 * 1000;
+  const comprasRecentesSnap = await db.collection("Pedidos")
     .where("uid", "==", uid)
-    .where("criadoEm", ">", Date.now() - 5 * 60 * 1000) // 5 min
+    .where("criadoEm", ">", cincoMinutos)
     .get();
 
-  if (comprasRecentes.size >= 3) score += 25;
+  if (comprasRecentesSnap.size >= 3) {
+    score += 25;
+    console.log(`Antifraude: usuário ${uid} fez ${comprasRecentesSnap.size} compras em 5 minutos (+25)`);
+  }
 
   /* ===============================
      MESMO IP EM VÁRIAS CONTAS
@@ -960,7 +957,10 @@ async function calcularScoreAntifraude({ uid, ip, deviceId, valor }) {
       .get();
 
     const uids = new Set(ipSnap.docs.map(d => d.data().uid));
-    if (uids.size >= 3) score += 30;
+    if (uids.size >= 3) {
+      score += 30;
+      console.log(`Antifraude: IP ${ip} usado por ${uids.size} contas diferentes (+30)`);
+    }
   }
 
   /* ===============================
@@ -973,7 +973,10 @@ async function calcularScoreAntifraude({ uid, ip, deviceId, valor }) {
       .get();
 
     const uids = new Set(deviceSnap.docs.map(d => d.data().uid));
-    if (uids.size >= 2) score += 35;
+    if (uids.size >= 2) {
+      score += 35;
+      console.log(`Antifraude: Device ${deviceId} usado por ${uids.size} contas diferentes (+35)`);
+    }
   }
 
   /* ===============================
@@ -981,13 +984,19 @@ async function calcularScoreAntifraude({ uid, ip, deviceId, valor }) {
   =============================== */
   const userSnap = await db.doc(`UsuariosPrivado/${uid}`).get();
   const criadoEm = userSnap.data()?.criadoEm?.toMillis?.() || 0;
+  const contaNova = Date.now() - criadoEm < 24 * 60 * 60 * 1000; // 24h
 
-  const contaNova = Date.now() - criadoEm < 24 * 60 * 60 * 1000;
+  if (contaNova && valor > 50) {
+    score += 40;
+    console.log(`Antifraude: conta nova com valor alto (${valor}) (+40)`);
+  }
 
-  if (contaNova && valor > 50) score += 40;
+  // Score máximo de 100
+  if (score > 100) score = 100;
 
   return score;
 }
+
 /* ===============================
    classificarRisco
 ================================ */
@@ -996,6 +1005,7 @@ function classificarRisco(score) {
   if (score >= 40) return "MEDIO";
   return "BAIXO";
 }
+
 /* ===============================
    aplicarBloqueioSeNecessario
 ================================ */
@@ -1007,7 +1017,10 @@ async function aplicarBloqueioSeNecessario(uid, risco) {
     bloqueadoEm: admin.firestore.FieldValue.serverTimestamp(),
     motivoBloqueio: "antifraude_automatico",
   }, { merge: true });
+
+  console.log(`Usuário ${uid} bloqueado automaticamente por risco ALTO`);
 }
+
 /* ===============================
    registrarEventoAntifraude
 ================================ */
@@ -1028,7 +1041,10 @@ async function registrarEventoAntifraude({
     pedidoId,
     criadoEm: admin.firestore.FieldValue.serverTimestamp(),
   });
+
+  console.log(`Evento antifraude registrado: uid=${uid}, risco=${risco}, score=${score}`);
 }
+
 /* ===============================
    verificarAntifraude
 ================================ */
@@ -1041,7 +1057,6 @@ async function verificarAntifraude({
   const JANELA_MS = 30 * 1000; // 30 segundos
   const LIMITE_PEDIDOS = 3;
 
-  // 🔎 Últimos pedidos do usuário
   const pedidosSnap = await db
     .collection("Pedidos")
     .where("uid", "==", uid)
@@ -1049,20 +1064,16 @@ async function verificarAntifraude({
     .limit(5)
     .get();
 
-  if (pedidosSnap.empty) return true;
+  if (pedidosSnap.empty) return { permitido: true };
 
   const agora = Date.now();
-
   const recentes = pedidosSnap.docs.filter(doc => {
     const criadoEm = doc.data().criadoEm?.toMillis?.();
     return criadoEm && agora - criadoEm < JANELA_MS;
   });
 
-  // 🧠 Regra antifraude: compras muito rápidas
   if (recentes.length >= LIMITE_PEDIDOS) {
     const eventoRef = db.collection("AntifraudeEventos").doc();
-
-    // 🔒 Evento antifraude imutável
     await eventoRef.set({
       uid,
       pedidoId,
@@ -1076,6 +1087,8 @@ async function verificarAntifraude({
       criadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    console.log(`Antifraude: compra rápida detectada para uid=${uid}, ${recentes.length} compras em 30s`);
+
     return {
       permitido: false,
       motivo: "COMPRA_RAPIDA",
@@ -1085,12 +1098,16 @@ async function verificarAntifraude({
 
   return { permitido: true };
 }
+
 /* ===============================
    WORKER COMPRA (Cloud Tasks)
 ================================ */
+/* ===============================
+   WORKER PROCESSAR COMPRA COMPLETO
+================================ */
 exports.workerProcessarCompra = functions
   .region("southamerica-east1")
-  .runWith({ memory: "512MB", timeoutSeconds: 60 })
+  .runWith({ memory: "512MB", timeoutSeconds: 120 })
   .https.onRequest(async (req, res) => {
     try {
       const { compraId } = req.body;
@@ -1104,46 +1121,41 @@ exports.workerProcessarCompra = functions
 
         const pedido = pedidoSnap.data();
 
-        // 🔒 IDEMPOTÊNCIA
         if (pedido.status === "processado") return;
 
-        const { uid, cartelas, valorTotal } = pedido;
+        const { uid, cartelas, valorTotal, indicadoPor } = pedido;
+
+        // ====== ANTI-FRAUDE ======
+        const score = await calcularScoreAntifraude({
+          uid,
+          ip: req.headers["x-forwarded-for"],
+          deviceId: req.headers["x-device-id"],
+          valor: valorTotal,
+        });
+        const risco = classificarRisco(score);
+
+        await registrarEventoAntifraude({
+          uid,
+          ip: req.headers["x-forwarded-for"],
+          deviceId: req.headers["x-device-id"],
+          score,
+          risco,
+          pedidoId: compraId,
+        });
+
+        if (risco === "ALTO") {
+          tx.update(pedidoRef, {
+            status: "bloqueado_antifraude",
+            scoreAntifraude: score,
+          });
+          await aplicarBloqueioSeNecessario(uid, risco);
+          return; // NÃO contar para mini-prêmios nem compartilhamento
+        }
 
         const userRef = db.collection("UsuariosPrivado").doc(uid);
         const saldoSnap = await tx.get(userRef);
-const score = await calcularScoreAntifraude({
-  uid,
-  ip: req.headers["x-forwarded-for"],
-  deviceId: req.headers["x-device-id"],
-  valor: valorTotal,
-});
-
-const risco = classificarRisco(score);
-
-await registrarEventoAntifraude({
-  uid,
-  ip: req.headers["x-forwarded-for"],
-  deviceId: req.headers["x-device-id"],
-  score,
-  risco,
-  pedidoId: compraId,
-});
-
-/* ===============================
-   RISCO ALTO → CANCELA COMPRA
-=============================== */
-if (risco === "ALTO") {
-  tx.update(pedidoRef, {
-    status: "bloqueado_antifraude",
-    scoreAntifraude: score,
-  });
-
-  await aplicarBloqueioSeNecessario(uid, risco);
-  return;
-}
         const saldoAtual = saldoSnap.data()?.saldo || 0;
 
-        // 💸 saldo insuficiente → rollback
         if (saldoAtual < valorTotal) {
           tx.update(pedidoRef, {
             status: "falhou",
@@ -1153,7 +1165,7 @@ if (risco === "ALTO") {
           return;
         }
 
-        // 🔒 RESERVA DAS CARTELAS (anti-duplicação global)
+        // ====== VENDA DAS CARTELAS ======
         for (const numero of cartelas) {
           const cartelaRef = db.collection("Cartelas").doc(String(numero));
           const cartelaSnap = await tx.get(cartelaRef);
@@ -1175,39 +1187,149 @@ if (risco === "ALTO") {
           });
         }
 
-        // 💰 LEDGER NEGATIVO (imutável)
+        // ====== LEDGER FINANCEIRO ======
+        const VALOR_CARTELA = 2.50;
+        const totalPremio = 2.0 * cartelas.length;
+        const totalTaxas = 0.25 * cartelas.length;
+        const totalCompartilhamento = 0.25 * cartelas.length;
+
         tx.set(userRef.collection("LedgerFinanceiro").doc(), {
           tipo: "compra_cartelas",
           valor: -valorTotal,
           referencia: compraId,
           status: "confirmado",
           criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          distribuicao: {
+            premio: totalPremio,
+            taxas: totalTaxas,
+            compartilhamento: totalCompartilhamento,
+          },
         });
 
-        // 💰 ATUALIZA SALDO DERIVADO
+        // Atualiza saldo
         tx.update(userRef, {
           saldo: admin.firestore.FieldValue.increment(-valorTotal),
         });
+
+        // ====== REPASSE DO COMPARTILHAMENTO ======
+        if (indicadoPor) {
+          const indicadoRef = db.collection("UsuariosPrivado").doc(indicadoPor);
+          tx.set(indicadoRef.collection("LedgerFinanceiro").doc(), {
+            tipo: "compartilhamento",
+            valor: totalCompartilhamento,
+            referencia: compraId,
+            status: "confirmado",
+            descricao: `R$0,25 por cada cartela comprada por indicação`,
+            criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+          tx.update(indicadoRef, {
+            saldo: admin.firestore.FieldValue.increment(totalCompartilhamento),
+          });
+        }
 
         // 📦 FINALIZA PEDIDO
         tx.update(pedidoRef, {
           status: "processado",
           processadoEm: admin.firestore.FieldValue.serverTimestamp(),
         });
+
+        // ====== ATUALIZAÇÃO DE MINI-PREMIOS ======
+        await atualizarMiniPremios(tx, cartelas.length);
       });
 
       return res.sendStatus(200);
     } catch (err) {
       console.error("❌ workerProcessarCompra:", err);
-
-      /**
-       * MUITO IMPORTANTE:
-       * retornar 500 faz a Cloud Tasks tentar novamente
-       * → retry automático seguro
-       */
-      return res.sendStatus(500);
+      return res.sendStatus(500); // retry automático Cloud Tasks
     }
   });
+
+
+  /* ===============================
+   atualizarMiniPremios
+================================ */
+async function atualizarMiniPremios(tx, quantidadeCartelas) {
+  const statusRef = db.collection("RifaStatus").doc("statusGeral");
+  const statusSnap = await tx.get(statusRef);
+
+  let data = statusSnap.exists ? statusSnap.data() : {
+    vendidasContador: 0,
+    rodadaAtual: 0,
+    proxPremio: 50,
+  };
+
+  data.vendidasContador += quantidadeCartelas;
+
+  const etapas = [
+    { vendidas: 200, premio: 50 },
+    { vendidas: 300, premio: 100 },
+    { vendidas: 500, premio: 250 },
+    { vendidas: 1000, premio: 500 },
+    { vendidas: 10000, premio: 5000 },
+  ];
+
+  for (let etapa of etapas) {
+    if (data.vendidasContador >= etapa.vendidas && data.proxPremio !== etapa.premio) {
+      tx.collection("Premios").add({
+        valor: etapa.premio,
+        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        descricao: `Mini-prêmio ${etapa.premio} reais`,
+      });
+
+      console.log(`🏆 Mini-prêmio sorteado: R$${etapa.premio}`);
+
+      data.proxPremio = etapa.premio;
+
+      if (etapa.premio === 5000) {
+        data.vendidasContador = 0;
+        data.proxPremio = 50;
+        data.rodadaAtual += 1;
+        console.log("🎉 Prêmio máximo atingido. Reiniciando rifa...");
+      }
+
+      break;
+    }
+  }
+
+  tx.set(statusRef, data, { merge: true });
+}
+  /* ===============================
+   FUNÇÃO DE SORTEIOS
+================================ */
+async function atualizarPremios(cartelasVendidas) {
+  const rodadaRef = db.collection("Rifa").doc("RodadaAtual");
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(rodadaRef);
+    let rodada = snap.exists ? snap.data() : {
+      vendasAcumuladas: 0,
+      premioMaximoPago: false,
+    };
+
+    rodada.vendasAcumuladas += cartelasVendidas;
+
+    // 🔄 Mini-prêmios
+    for (const mini of MINI_PREMIOS) {
+      if (rodada.vendasAcumuladas >= mini.vendas && (!rodada[`premio${mini.premio}`] || rodada[`premio${mini.premio}`] === false)) {
+        rodada[`premio${mini.premio}`] = true;
+        await pagarPremio(mini.premio);
+      }
+    }
+
+    // 💥 Prêmio máximo
+    if (rodada.vendasAcumuladas >= VENDAS_PREMIO_MAXIMO && !rodada.premioMaximoPago) {
+      rodada.premioMaximoPago = true;
+      await pagarPremio(PREMIO_MAXIMO);
+      // Reinicia ciclo
+      rodada.vendasAcumuladas = 0;
+      for (const mini of MINI_PREMIOS) rodada[`premio${mini.premio}`] = false;
+      rodada.premioMaximoPago = false;
+    }
+
+    tx.set(rodadaRef, rodada, { merge: true });
+  });
+}
+
   /* ===============================
    congelarSaldo
 ================================ */
@@ -1320,9 +1442,9 @@ exports.criarPedido = functions
     return { ok: true };
   });
 
-/* ===============================
-   workerProcessarPedid
-================================ */
+// ===============================
+// WORKER → PROCESSAR PEDIDO
+// ===============================
 exports.workerProcessarPedido = functions.firestore
   .document("Pedidos/{pedidoId}")
   .onUpdate(async (change, context) => {
@@ -1331,43 +1453,42 @@ exports.workerProcessarPedido = functions.firestore
 
     if (depois.status !== "pago" || depois.processado) return;
 
-    const {
-      VALOR_CARTELA,
-      FUNDO_PREMIO,
-      VALOR_INDICACAO,
-      CUSTO_APP,
-      LUCRO_PLATAFORMA,
-    } = require("./financeiro.config");
-
     const batch = db.batch();
 
-    // 🔹 Criar cartela
-    const cartelaRef = db.collection("Cartelas").doc();
-    batch.set(cartelaRef, {
-      uid: depois.uid,
-      pedidoId,
-      valorUnitario: VALOR_CARTELA,
-      fundoPremio: FUNDO_PREMIO,
-      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    // 🔹 Criar cartelas
+    for (const c of depois.cartelas) {
+      const cartelaRef = db.collection("Cartelas").doc();
+      batch.set(cartelaRef, {
+        uid: depois.uid,
+        pedidoId,
+        valorUnitario: VALOR_CARTELA,
+        fundoPremio: PREMIO_UNITARIO,
+        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        rodada: depois.rodada || 1,
+        status: "vendida",
+      });
+    }
 
     // 🔹 Financeiro
     const financeiroRef = db.collection("Financeiro").doc();
     batch.set(financeiroRef, {
       uid: depois.uid,
       pedidoId,
-      entrada: VALOR_CARTELA,
-      premio: FUNDO_PREMIO,
-      indicacao: VALOR_INDICACAO,
-      custoApp: CUSTO_APP,
-      lucroPlataforma: LUCRO_PLATAFORMA,
+      entrada: VALOR_CARTELA * depois.cartelas.length,
+      premio: PREMIO_UNITARIO * depois.cartelas.length,
+      indicacao: COMPARTILHAMENTO * depois.cartelas.length,
+      custoApp: TAXAS * depois.cartelas.length,
       criadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // 🔹 Atualizar sorteio
-    batch.update(db.doc("Sorteios/ativo"), {
-      cartelasVendidas: admin.firestore.FieldValue.increment(1),
-      fundoPremio: admin.firestore.FieldValue.increment(FUNDO_PREMIO),
+    // 🔹 Atualizar sorteio global
+    const sorteioRef = db.doc("Sorteios/ativo");
+    batch.update(sorteioRef, {
+      cartelasVendidas: admin.firestore.FieldValue.increment(depois.cartelas.length),
+      fundoPremio: admin.firestore.FieldValue.increment(PREMIO_UNITARIO * depois.cartelas.length),
+      compartilhamentoAcumulado: admin.firestore.FieldValue.increment(
+        COMPARTILHAMENTO * depois.cartelas.length
+      ),
     });
 
     // 🔹 Marcar pedido como processado
@@ -1375,20 +1496,16 @@ exports.workerProcessarPedido = functions.firestore
 
     await batch.commit();
   });
-/* ===============================
-   AO CRIAR USUÁRIO → MISSÃO + CÓDIGO COMPARTILHAMENTO SEGURO
-================================ */
+// ===============================
+// GERAR CÓDIGO DE COMPARTILHAMENTO SEGURO AO CRIAR USUÁRIO
+// ===============================
 exports.onUserCreate = functions.auth.user().onCreate(async (user) => {
   const uid = user.uid;
   const agora = admin.firestore.Timestamp.now();
-  const expira = admin.firestore.Timestamp.fromDate(
-    new Date(Date.now() + 24 * 60 * 60 * 1000) // +24h
-  );
+  const expira = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 24*60*60*1000));
 
-  // -------------------------------
-  // 1️⃣ Criar missão diária
-  // -------------------------------
-  const missaoRef = db.collection('MissoesAtivas').doc(uid);
+  // Criar missão diária
+  const missaoRef = db.collection("MissoesAtivas").doc(uid);
   await missaoRef.set({
     meta: 3,
     atual: 0,
@@ -1398,37 +1515,21 @@ exports.onUserCreate = functions.auth.user().onCreate(async (user) => {
     expiraEm: expira,
   });
 
-  // -------------------------------
-  // 2️⃣ Gerar código sequencial de compartilhamento de forma segura
-  // -------------------------------
+  // Gerar código sequencial de compartilhamento
   const contadorRef = db.collection("Contadores").doc("usuariosCompartilhamento");
   let codigo = "";
 
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(contadorRef);
-    let proximo = 1;
+    let proximo = snap.exists ? (snap.data().ultimo || 0) + 1 : 1;
+    if (proximo > 1000000) throw new Error("Limite de códigos atingido (1 milhão)");
 
-    if (snap.exists) {
-      proximo = (snap.data().ultimo || 0) + 1;
-    }
-
-    if (proximo > 1000000) {
-      throw new Error("Limite de códigos atingido (1 milhão)");
-    }
-
-    // Atualiza contador
     tx.set(contadorRef, { ultimo: proximo }, { merge: true });
 
-    // Gera código formatado
     codigo = `Rifa${String(proximo).padStart(6, "0")}`;
-
-    // Salva no usuário
     const userRef = db.collection("UsuariosPrivado").doc(uid);
     tx.set(userRef, {
-      compartilhamento: {
-        codigo,
-        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-      },
+      compartilhamento: { codigo, criadoEm: admin.firestore.FieldValue.serverTimestamp(), saldo: 0 },
       saldo: 0,
       scoreAntifraude: 0,
       bloqueado: false,
@@ -1437,81 +1538,52 @@ exports.onUserCreate = functions.auth.user().onCreate(async (user) => {
 
   console.log(`🆕 Usuário ${uid} criado | Código de compartilhamento: ${codigo}`);
 });
-/* ===============================
-   registrarCompartilhamentoAposCompra
-================================ */
+// ===============================
+// REGISTRAR INDICAÇÃO E BÔNUS DE COMPARTILHAMENTO
+// ===============================
 async function registrarCompartilhamentoAposCompra({ indicadoUid }) {
   const indicacaoRef = db.collection("Indicacoes").doc(indicadoUid);
-  const hoje = new Date().toISOString().slice(0, 10);
+  const hoje = new Date().toISOString().slice(0,10);
 
   await db.runTransaction(async (tx) => {
     const indicacaoSnap = await tx.get(indicacaoRef);
-    if (!indicacaoSnap.exists) return; // sem indicação
+    if (!indicacaoSnap.exists) return;
 
-    const indicacao = indicacaoSnap.data();
+    const { indicadorUid, pago } = indicacaoSnap.data();
+    if (indicadorUid === indicadoUid || pago === true) return;
 
-    // 🔒 Já paga → idempotência
-    if (indicacao.pago === true) return;
-
-    const { indicadorUid } = indicacao;
-
-    // 🔒 Anti auto-indicação
-    if (indicadorUid === indicadoUid) return;
-
-    const diarioRef = db
-      .collection("IndicacoesDiarias")
-      .doc(`${indicadorUid}_${hoje}`);
-
+    const diarioRef = db.collection("IndicacoesDiarias").doc(`${indicadorUid}_${hoje}`);
     const diarioSnap = await tx.get(diarioRef);
-    const totalPagoHoje = diarioSnap.exists
-      ? diarioSnap.data().totalPago || 0
-      : 0;
+    const totalHoje = diarioSnap.exists ? diarioSnap.data().totalHoje || 0 : 0;
+    if (totalHoje >= 5) return;
 
-    // ⛔ Limite diário: 3
-    if (totalPagoHoje >= 3) return;
-
-    // 💰 Credita saldo
-    tx.update(
-      db.collection("UsuariosPrivado").doc(indicadorUid),
-      {
-        saldo: admin.firestore.FieldValue.increment(0.25),
-        atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
-      }
-    );
-
-    // 📊 Atualiza controle diário
-    tx.set(
-      diarioRef,
-      {
-        indicadorUid,
-        data: hoje,
-        totalPago: totalPagoHoje + 1,
-        atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    // 🔐 Marca indicação como paga (NUNCA mais paga)
-    tx.update(indicacaoRef, {
-      pago: true,
-      pagoEm: admin.firestore.FieldValue.serverTimestamp(),
-      valorPago: 0.25,
+    tx.update(db.collection("UsuariosPrivado").doc(indicadorUid), {
+      saldo: admin.firestore.FieldValue.increment(0.25),
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // 📜 Ledger imutável
-    tx.set(
-      db
-        .collection("UsuariosPrivado")
-        .doc(indicadorUid)
-        .collection("LedgerFinanceiro")
-        .doc(),
-      {
-        tipo: "indicacao",
-        valor: 0.25,
-        indicadoUid,
-        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-      }
-    );
+    if (totalHoje + 1 === 5) {
+      tx.update(db.collection("UsuariosPrivado").doc(indicadorUid), {
+        cartelas: admin.firestore.FieldValue.increment(1),
+      });
+    }
+
+    tx.set(diarioRef, {
+      indicadorUid,
+      data: hoje,
+      totalHoje: totalHoje + 1,
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    tx.update(indicacaoRef, { pago: true, pagoEm: admin.firestore.FieldValue.serverTimestamp(), valorPago: 0.25 });
+
+    tx.set(db.collection("UsuariosPrivado").doc(indicadorUid).collection("LedgerFinanceiro").doc(), {
+      tipo: "indicacao",
+      valor: 0.25,
+      cartelaExtra: totalHoje + 1 === 5 ? 1 : 0,
+      indicadoUid,
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
   });
 }
 /* ===============================
@@ -1728,55 +1800,54 @@ async function atualizarRanking(uid, nome) {
     { merge: true }
   );
 }
-/* ===============================
-   verificarSorteio
-================================ */
+// ===============================
+// SORTEIO DE MINI-PRÊMIOS E PRÊMIO MÁXIMO
+// ===============================
 exports.verificarSorteio = functions.firestore
   .document("Sorteios/ativo")
   .onUpdate(async (change) => {
     const depois = change.after.data();
-    const cartelas = depois.cartelasVendidas;
-
+    const cartelasVendidas = depois.cartelasVendidas;
     const controleRef = db.doc("Sorteios/controle");
     const controleSnap = await controleRef.get();
-
-    const ultimo = controleSnap.exists ? controleSnap.data().ultimoSorteioEm : 0;
+    const ultimo = controleSnap.exists ? controleSnap.data().ultimoMetaProcessada || 0 : 0;
 
     let premio = null;
-    let limite = null;
+    let meta = null;
 
-    if (cartelas >= ultimo + 500) {
-      premio = 500;
-      limite = ultimo + 500;
-    } else if (cartelas >= ultimo + 100) {
-      premio = 100;
-      limite = ultimo + 100;
+    for (const m of METAS) {
+      if (cartelasVendidas >= ultimo + m.cartelas) {
+        premio = m.premio;
+        meta = ultimo + m.cartelas;
+        break;
+      }
     }
 
     if (!premio) return;
 
-    const cartelasSnap = await db
-      .collection("Cartelas")
-      .where("criadoEm", "<=", admin.firestore.Timestamp.fromMillis(Date.now()))
-      .get();
-
+    // Seleciona vencedor aleatório
+    const cartelasSnap = await db.collection("Cartelas").get();
     if (cartelasSnap.empty) return;
 
-    const vencedor =
-      cartelasSnap.docs[Math.floor(Math.random() * cartelasSnap.docs.length)];
-
+    const vencedor = cartelasSnap.docs[Math.floor(Math.random() * cartelasSnap.docs.length)];
     const batch = db.batch();
 
     batch.set(db.collection("Premios").doc(), {
       uid: vencedor.data().uid,
       valor: premio,
-      cartelasNoMomento: limite,
+      cartelasNoMomento: meta,
       criadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    batch.set(controleRef, { ultimoSorteioEm: limite }, { merge: true });
-
+    // Atualiza controle
+    batch.set(controleRef, { ultimoMetaProcessada: meta }, { merge: true });
     await batch.commit();
+
+    // Se prêmio máximo atingido, zera tudo
+    if (meta >= 10000) {
+      await db.doc("Sorteios/ativo").update({ cartelasVendidas: 0, fundoPremio: 0 });
+      await db.doc("Sorteios/controle").set({ ultimoMetaProcessada: 0 }, { merge: true });
+    }
   });
 
 /* ===============================
