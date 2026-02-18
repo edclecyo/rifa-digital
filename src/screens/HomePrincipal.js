@@ -48,15 +48,18 @@ export default function HomePrincipal() {
   const prevRef = useRef({ premios: 0, compartilhamento: 0 });
   const animatedWidth = useRef(new Animated.Value(0)).current;
   const animatedPercent = useRef(new Animated.Value(0)).current;
-  const shareProgressWidth = useRef(new Animated.Value(0)).current;
 
-  const META_MINIMA_SORTEIO = 4000;
-  const PREMIO_ATUAL = 5000;
+  const META_MINIMA_SORTEIO = 10000; // Meta final
+  const PREMIO_ATUAL = 10000; // Valor final do prêmio
 
-  // Meta de compartilhamento
-  const META_COMPARTILHAR_REAIS = 1000; // R$1000
-  const META_COMPARTILHAR_CARTELAS = 50; // Cartelas extras que o usuário pode ganhar
-  const REAIS_POR_COMPRA = 0.25; // R$ por amigo que comprar
+  /* =================== ETAPAS DO PRÊMIO =================== */
+  const ETAPAS_PREMIOS = [
+    { cartelas: 200, valor: 50 },
+    { cartelas: 300, valor: 100 },
+    { cartelas: 500, valor: 250 },
+    { cartelas: 1000, valor: 500 },
+    { cartelas: META_MINIMA_SORTEIO, valor: PREMIO_ATUAL },
+  ];
 
   /* ================= RODADA ================= */
   useEffect(() => {
@@ -97,17 +100,6 @@ export default function HomePrincipal() {
       });
 
       setSaldo(Number.isFinite(total) ? total : 0);
-
-      // Atualiza barra de compartilhamento
-      const progresso = Math.min(
-        (compartilhamento * REAIS_POR_COMPRA) / META_COMPARTILHAR_REAIS,
-        1
-      );
-      Animated.timing(shareProgressWidth, {
-        toValue: progresso,
-        duration: 600,
-        useNativeDriver: false,
-      }).start();
     });
   }, [profile?.uid, isAdmin]);
 
@@ -170,7 +162,7 @@ export default function HomePrincipal() {
     if (!codigo) return;
 
     const link = `https://rifa-digital-f6425.web.app/ref?code=${codigo}`;
-    const message = `🚀 Compartilhe com seus amigos e cada amigo que comprar através do seu link te dá R$0,25 + cartelas grátis! Quanto mais compartilhar, maior seu potencial de renda! \nUse meu código: ${codigo}\n${link}`;
+    const message = `🚀 Ganhe cartelas grátis e dinheiro! Use meu código ${codigo} e receba recompensas sempre que alguém comprar!\n${link}`;
 
     try {
       await Share.share({ message });
@@ -286,7 +278,27 @@ export default function HomePrincipal() {
             🎉 PRÊMIO R$ {PREMIO_ATUAL} 🎉
           </Text>
 
-          {showMensagem20 && <Text style={{ color: "#fff", textAlign: "center", marginTop: 6 }}>Faltam 20 cartelas!</Text>}
+      {/* ETAPAS DO PRÊMIO */}
+<View style={{ marginTop: 12 }}>
+  {ETAPAS_PREMIOS.map((etapa, index) => {
+    const restantes = etapa.cartelas - cartelasDisponiveis;
+
+    // Mostrar apenas se faltarem 20 ou menos cartelas, e ainda não zerou
+    if (restantes > 0 && restantes <= 20) {
+      return (
+        <Text
+          key={index}
+          style={{ color: "#fff", fontSize: 14, textAlign: "center", marginVertical: 2 }}
+        >
+          {`⚡ Faltam ${restantes} cartelas para concorrer a R$${etapa.valor}`}
+        </Text>
+      );
+    }
+
+    return null; // caso contrário não mostra nada
+  })}
+</View>
+
 
           <View style={{ marginTop: 10, height: 22, borderRadius: 12, overflow: "hidden", backgroundColor: "#374151" }}>
             <Animated.View
@@ -327,13 +339,28 @@ export default function HomePrincipal() {
           <Text style={{ color: "#000", fontWeight: "bold", textAlign: "center" }}>🎰 Ver Sorteio Ao Vivo</Text>
         </Pressable>
 
-        {/* COMPARTILHAR – BARRA DE PROGRESSO META */}
+        {/* COMPARTILHAR */}
         <View style={{ marginTop: 20, padding: 16, borderRadius: 14, backgroundColor: "#1f2937", borderWidth: 2, borderColor: "#f59e0b" }}>
           <Text style={{ color: "#f59e0b", fontSize: 22, fontWeight: "bold", textAlign: "center" }}>
-            🚀 Ganhe R$1000 + Cartelas Extras!
+            🚀 Ganhe sem gastar nada!
           </Text>
           <Text style={{ color: "#fff", fontSize: 16, textAlign: "center", marginTop: 6 }}>
-            Compartilhe com seus amigos e cada amigo que comprar te aproxima da meta!
+            Compartilhe com seus amigos e cada amigo que comprar através do seu link te dá:
+          </Text>
+
+          <View style={{ flexDirection: "row", justifyContent: "space-around", marginTop: 12 }}>
+            <View style={{ alignItems: "center" }}>
+              <Text style={{ color: "#34d399", fontSize: 28, fontWeight: "bold" }}>🎟️</Text>
+              <Text style={{ color: "#fff", fontSize: 14 }}>Cartelas grátis</Text>
+            </View>
+            <View style={{ alignItems: "center" }}>
+              <Text style={{ color: "#facc15", fontSize: 28, fontWeight: "bold" }}>💸</Text>
+              <Text style={{ color: "#fff", fontSize: 14 }}>R$0,25 por compra</Text>
+            </View>
+          </View>
+
+          <Text style={{ color: "#fff", fontSize: 14, textAlign: "center", marginTop: 12 }}>
+            Quanto mais compartilhar, maior seu potencial de renda!
           </Text>
 
           <Pressable
@@ -349,18 +376,18 @@ export default function HomePrincipal() {
             <Text style={{ color: "#000", fontWeight: "bold", fontSize: 16 }}>📤 Compartilhar agora</Text>
           </Pressable>
 
-          {/* Barra de progresso de compartilhamento */}
+          {/* Barra de progresso de amigos comprando */}
           <View style={{ marginTop: 16, height: 20, borderRadius: 12, overflow: "hidden", backgroundColor: "#374151" }}>
             <Animated.View
               style={{
                 height: "100%",
-                width: shareProgressWidth.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
+                width: animatedWidth.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
                 backgroundColor: "#34d399",
               }}
             />
           </View>
           <Text style={{ color: "#fff", fontSize: 14, textAlign: "center", marginTop: 4 }}>
-            {`Progresso: R$${(usuarioPrivado.compartilhamento.uso * REAIS_POR_COMPRA).toFixed(2)} de R$${META_COMPARTILHAR_REAIS} + ${Math.min(usuarioPrivado.compartilhamento.uso, META_COMPARTILHAR_CARTELAS)} cartelas extras`}
+            {`Já compraram: ${usuarioPrivado.compartilhamento.uso} amigos`}
           </Text>
         </View>
       </ScrollView>
