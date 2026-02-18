@@ -30,6 +30,7 @@ export default function HomePrincipal() {
   const isAdmin = profile?.isAdmin === true;
 
   const [saldo, setSaldo] = useState(0);
+  const [ganhadores, setGanhadores] = useState([]);
   const [cartelasDisponiveis, setCartelasDisponiveis] = useState(0);
   const [ranking, setRanking] = useState([]);
   const [rodadaAtual, setRodadaAtual] = useState(1);
@@ -142,31 +143,29 @@ useEffect(() => {
   });
 }, [rodadaAtual, isAdmin]);
 
-  /* ================= RANKING ================= */
+  /* ================= GANHADORES ================= */
   useEffect(() => {
     if (isAdmin) return;
 
-    async function carregarRanking() {
-      const snap = await getDocs(query(collection(db, "UsuariosPrivado"), limit(20)));
-      const lista = snap.docs
-        .map((d) => {
-          const data = d.data();
-          const premios = Number(data.premios ?? data.premios?.saldo ?? 0);
-          const compartilhamento = Number(data.compartilhamento?.saldo ?? 0);
-          return {
-            uid: d.id,
-            nome: data.nome || "Usuário",
-            foto: data.foto || null,
-            total: premios + compartilhamento,
-          };
-        })
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 5);
-      setRanking(lista);
-    }
+    const q = query(
+      collection(db, "Ganhadores"),
+      where("rodada", "==", rodadaAtual),
+      limit(10)
+    );
 
-    carregarRanking();
-  }, [isAdmin]);
+    const unsubscribe = onSnapshot(q, (snap) => {
+      const lista = snap.docs.map((d) => ({
+        id: d.id,
+        nome: d.data().nome || "Usuário",
+        valor: Number(d.data().valor || 0),
+        foto: d.data().foto || null,
+      }));
+
+      setGanhadores(lista);
+    });
+
+    return unsubscribe;
+  }, [rodadaAtual, isAdmin]);
 
   /* ================= COMPARTILHAR ================= */
   async function handleCompartilhar() {
@@ -221,46 +220,122 @@ useEffect(() => {
         {/* SAUDAÇÃO */}
         <Text style={{ color: "#fff", fontSize: 20 }}>Olá, {profile?.nome || "Usuário"} 👋</Text>
 
-        {/* RANKING HORIZONTAL */}
-        <View style={{ marginTop: 16 }}>
-          <Text style={{ color: "#facc15", fontSize: 18, fontWeight: "bold", marginBottom: 12 }}>
-            🏆 Últimos Ganhos
+          {/* GANHADORES */}
+<View style={{ marginTop: 20 }}>
+  <Text
+    style={{
+      color: "#facc15",
+      fontSize: 20,
+      fontWeight: "bold",
+      marginBottom: 10,
+    }}
+  >
+    🏆 Últimos Ganhadores
+  </Text>
+
+  {ganhadores.length === 0 ? (
+    <View
+      style={{
+        backgroundColor: "#1f2937",
+        padding: 18,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: "#374151",
+        alignItems: "center",
+      }}
+    >
+      <Text
+        style={{
+          color: "#fff",
+          fontSize: 16,
+          fontWeight: "bold",
+          marginBottom: 6,
+        }}
+      >
+        Nenhum ganhador ainda
+      </Text>
+
+      <Text style={{ color: "#9ca3af", textAlign: "center" }}>
+        O primeiro prêmio está cada vez mais perto!
+      </Text>
+
+      <Text style={{ color: "#9ca3af", textAlign: "center", marginTop: 4 }}>
+        Compre sua cartela e seja o primeiro vencedor 🎉
+      </Text>
+    </View>
+  ) : (
+    <FlatList
+      data={ganhadores}
+      keyExtractor={(item) => item.id}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ paddingRight: 10, marginTop: 6 }}
+      renderItem={({ item }) => (
+        <View
+          style={{
+            width: 130,
+            backgroundColor: "#1f2937",
+            borderRadius: 16,
+            marginRight: 12,
+            padding: 14,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: "#facc15",
+          }}
+        >
+          {/* Avatar */}
+          <View
+            style={{
+              width: 60,
+              height: 60,
+              borderRadius: 30,
+              backgroundColor: "#374151",
+              justifyContent: "center",
+              alignItems: "center",
+              marginBottom: 8,
+            }}
+          >
+            {item.foto ? (
+              <Image
+                source={{ uri: item.foto }}
+                style={{ width: 60, height: 60, borderRadius: 30 }}
+              />
+            ) : (
+              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 18 }}>
+                {item.nome?.[0] || "U"}
+              </Text>
+            )}
+          </View>
+
+          {/* Nome */}
+          <Text
+            style={{
+              color: "#fff",
+              fontWeight: "bold",
+              fontSize: 14,
+              textAlign: "center",
+            }}
+            numberOfLines={1}
+          >
+            {item.nome}
           </Text>
 
-          <FlatList
-            data={ranking}
-            keyExtractor={(item) => item.uid}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingRight: 10 }}
-            renderItem={({ item, index }) => {
-              const anim = new Animated.Value(0);
-              Animated.timing(anim, { toValue: 1, duration: 500, delay: index * 150, useNativeDriver: true }).start();
-
-              return (
-                <Animated.View
-                  style={[
-                    styles.cardHorizontal,
-                    {
-                      opacity: anim,
-                      transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }],
-                    },
-                  ]}
-                >
-                  <View style={styles.avatarHorizontal}>
-                    {item.foto ? (
-                      <Image source={{ uri: item.foto }} style={styles.avatarHorizontal} resizeMode="cover" />
-                    ) : (
-                      <Text style={{ color: "#fff", fontWeight: "bold" }}>{item.nome[0] || "U"}</Text>
-                    )}
-                  </View>
-                  <Text style={styles.nomeHorizontal}>{item.nome}</Text>
-                  <Text style={styles.ganhoHorizontal}>🎉 R$ {item.total.toFixed(2)}</Text>
-                </Animated.View>
-              );
+          {/* Valor */}
+          <Text
+            style={{
+              color: "#34d399",
+              fontWeight: "bold",
+              marginTop: 4,
+              fontSize: 15,
             }}
-          />
+          >
+            🎉 R$ {Number(item.valor || 0).toFixed(2)}
+          </Text>
         </View>
+      )}
+    />
+  )}
+</View>
 
         {/* SALDO */}
         <View style={{ backgroundColor: "#020617", padding: 16, borderRadius: 14, marginTop: 16 }}>

@@ -8,11 +8,9 @@ export default function StatusSorteio() {
 
   useEffect(() => {
     const unsub = onSnapshot(
-      doc(db, 'StatusSorteio', 'geral'),
+      doc(db, 'StatusSorteio', 'geral'), // mantém conforme função
       (snap) => {
-        if (snap.exists()) {
-          setStatus(snap.data());
-        }
+        if (snap.exists()) setStatus(snap.data());
       }
     );
 
@@ -21,59 +19,38 @@ export default function StatusSorteio() {
 
   if (!status) return null;
 
-  const cores = {
-    vermelho: '#dc2626',
-    verde: '#16a34a',
-    dourado: '#facc15',
-  };
-
-  const corAtual = cores[status.nivel] || '#dc2626';
-
   return (
     <View
       style={{
-        backgroundColor: corAtual,
+        backgroundColor: '#e0f2fe',
         padding: 16,
         borderRadius: 16,
         margin: 16,
       }}
     >
-      <Text
-        style={{
-          color: '#020617',
-          fontWeight: 'bold',
-          fontSize: 18,
-        }}
-      >
-        🎰 Sorteio — Rodada {status.rodada || 1}
+      {/* Rodada atual */}
+      <Text style={{ fontWeight: 'bold', fontSize: 18, marginBottom: 6 }}>
+        🎰 Rodada: {status.rodada || 1}
       </Text>
 
-      <Text style={{ color: '#020617', marginTop: 6 }}>
-        🎟️ Cartelas vendidas: {status.cartelasVendidas || 0}
+      {/* Cartelas vendidas */}
+      <Text style={{ fontSize: 16, marginBottom: 4 }}>
+        🎟️ Vendidas: {status.cartelasVendidas || 0}
       </Text>
 
-      <Text style={{ color: '#020617' }}>
-        🎯 Meta atual: {status.metaAtual || 0}
+      {/* Meta atual processada */}
+      <Text style={{ fontSize: 16, marginBottom: 4 }}>
+        🎯 Última meta: {status.metaAtual || 0}
       </Text>
 
-      <Text
-        style={{
-          color: '#020617',
-          marginTop: 6,
-          fontWeight: 'bold',
-        }}
-      >
-        🔔 Nível: {(status.nivel || 'vermelho').toUpperCase()}
+      {/* Prêmio atual */}
+      <Text style={{ fontSize: 16, marginBottom: 4, fontWeight: 'bold' }}>
+        💰 Prêmio atual: R$ {Number(status.premioAtual || 0).toFixed(2)}
       </Text>
 
+      {/* Sorteio liberado */}
       {status.sorteioLiberado && (
-        <Text
-          style={{
-            marginTop: 8,
-            fontWeight: 'bold',
-            color: '#14532d',
-          }}
-        >
+        <Text style={{ marginTop: 8, fontWeight: 'bold', color: '#14532d' }}>
           ✅ Sorteio liberado!
         </Text>
       )}

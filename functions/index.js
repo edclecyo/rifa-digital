@@ -24,10 +24,12 @@ const SUPER_ADMIN_UID = "s7wrbiuWf0NQQOE82BFOnnWAW5n2";
 /* ===============================
    CONFIGURAÇÕES DE RIFA
 ================================ */
-const VALOR_CARTELA = 2.5; // preço da cartela
-const PERCENTUAL_PREMIO = 0.8; // R$2 de 2,5 para premiação
-const PERCENTUAL_DESPESAS = 0.1; // R$0,25 para taxas
-const PERCENTUAL_COMPARTILHAMENTO = 0.1; // R$0,25 para compartilhamento
+const VALOR_CARTELA = 2.5;
+const NUMEROS_POR_CARTELA = 6;     // 6 números por cartela
+const LIMITE_BATCH = 400;  
+const PERCENTUAL_PREMIO = 0.8;          // R$2,00 vai para prêmios
+const PERCENTUAL_DESPESAS = 0.1;        // R$0,25 taxas
+const PERCENTUAL_COMPARTILHAMENTO = 0.1; // R$0,25 bônus indicação
 
 // Mini prêmios progressivos
 const MINI_PREMIOS = [
@@ -38,7 +40,7 @@ const MINI_PREMIOS = [
 ];
 
 // Prêmio máximo
-const VENDAS_PREMIO_MAXIMO = 10000;
+const VENDAS_PREMIO_MAXIMO = 12500;
 const PREMIO_MAXIMO = 5000;
 
 /* ===============================
@@ -495,12 +497,21 @@ exports.criarCartelasAutomatico = functions
       const statusRef = db.collection("StatusSorteio").doc("geral");
       const statusSnap = await statusRef.get();
 
-      const rodadaAtual = statusSnap.exists
-        ? statusSnap.data().rodada || 1
-        : 1;
+      const statusAtual = statusSnap.exists ? statusSnap.data() : {};
+
+      const rodadaAtual = statusAtual.rodada || 1;
+      const cartelasVendidas = statusAtual.cartelasVendidas || 0;
+
+      /* 🚫 SE ATINGIU 12.500 → NÃO CRIA MAIS */
+      if (cartelasVendidas >= 12500) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Rodada finalizada. Aguarde o reset automático."
+        );
+      }
 
       /* ===============================
-         🎟️ CARTELAS EXISTENTES
+         🎟️ CARTELAS EXISTENTES NA RODADA
       =============================== */
       const cartelasRef = db.collection("Cartelas");
 
@@ -510,22 +521,23 @@ exports.criarCartelasAutomatico = functions
 
       const existentes = existentesSnap.docs.map((d) => d.id);
 
-      if (existentes.length >= TOTAL_CARTELAS) {
-        throw new functions.https.HttpsError(
-          "failed-precondition",
-          "Limite de cartelas atingido"
-        );
-      }
-
       /* ===============================
-         🏗️ CRIAÇÃO EM BATCH
+         🏗️ CRIAÇÃO CONTÍNUA (SEM LIMITE FIXO)
       =============================== */
       let batch = db.batch();
       let count = 0;
       const codigosUsados = new Set(existentes);
 
-      for (let i = 1; i <= TOTAL_CARTELAS; i++) {
-        const id = `C${i.toString().padStart(4, "0")}`;
+      // cria apenas um bloco por execução (seguro pro Firestore)
+      const LIMITE_CRIACAO = 2000;
+
+      let numeroSequencial = existentes.length;
+
+      for (let i = 1; i <= LIMITE_CRIACAO; i++) {
+        numeroSequencial++;
+
+        const id = `codigo-${numeroSequencial.toString().padStart(5, "0")}`;
+
         if (codigosUsados.has(id)) continue;
 
         const numeros = [];
@@ -535,7 +547,7 @@ exports.criarCartelasAutomatico = functions
         }
 
         batch.set(cartelasRef.doc(id), {
-          codigo: i,
+          codigo: id,
           numeros,
           rodada: rodadaAtual,
           status: "disponivel",
@@ -554,7 +566,6 @@ exports.criarCartelasAutomatico = functions
         }
       }
 
-      // 🔐 evita commit vazio
       if (count % LIMITE_BATCH !== 0) {
         await batch.commit();
       }
@@ -564,23 +575,33 @@ exports.criarCartelasAutomatico = functions
       =============================== */
       await atualizarStatusSorteio(0);
 
-      const statusAtualSnap = await statusRef.get();
-      const statusAtual = statusAtualSnap.exists ? statusAtualSnap.data() : {};
-
       /* ===============================
-         🎯 METAS / SORTEIOS AUTOMÁTICOS
+         🎯 SE CHEGOU EM 12.500 → PRÊMIO FINAL + RESET
       =============================== */
-      for (const meta of METAS) {
-        if (
-          statusAtual.cartelasVendidas >= meta.cartelas &&
-          (statusAtual.ultimaMetaProcessada || 0) < meta.cartelas
-        ) {
-          await sortearPremio(meta.premio, meta.nivel, rodadaAtual);
+      const statusDepoisSnap = await statusRef.get();
+      const statusDepois = statusDepoisSnap.exists
+        ? statusDepoisSnap.data()
+        : {};
 
-          await statusRef.update({
-            ultimaMetaProcessada: meta.cartelas,
-          });
-        }
+      if ((statusDepois.cartelasVendidas || 0) >= 12500) {
+        // 🔥 executa prêmio máximo
+        await sortearPremio(PREMIO_MAXIMO, "final", rodadaAtual);
+
+        // 🔄 reset da rodada
+        await statusRef.set(
+          {
+            rodada: rodadaAtual + 1,
+            cartelasVendidas: 0,
+            ultimaMetaProcessada: 0,
+            metaAtual: 0,
+            nivel: null,
+            premioAtual: 0,
+            sorteioLiberado: false,
+            faltamCartelas: 12500,
+            atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
       }
 
       /* ===============================
@@ -611,6 +632,8 @@ exports.criarCartelasAutomatico = functions
       );
     }
   });
+
+
 /* ===============================
    reservarCartelas
 ================================ */
@@ -766,6 +789,95 @@ exports.limparReservasExpiradas = functions
     console.log(`🧹 Reservas expiradas limpas: ${snap.size}`);
 
     return null;
+  });
+  /* ===============================
+   comprarCartela
+================================ */
+exports.comprarCartela = functions
+  .region("southamerica-east1")
+  .https.onCall(async (data, context) => {
+    /* ================= 🔐 AUTH ================= */
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        "unauthenticated",
+        "Usuário precisa estar logado"
+      );
+    }
+
+    const uid = context.auth.uid;
+
+    /* ================= 📊 STATUS ATUAL ================= */
+    const statusRef = db.collection("StatusSorteio").doc("geral");
+
+    const resultado = await db.runTransaction(async (tx) => {
+      const statusSnap = await tx.get(statusRef);
+
+      if (!statusSnap.exists) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Status do sorteio não encontrado"
+        );
+      }
+
+      const status = statusSnap.data();
+
+      const cartelasVendidas = status.cartelasVendidas || 0;
+      const rodada = status.rodada || 1;
+
+      /* ================= 🚫 BLOQUEIO TOTAL ================= */
+      if (cartelasVendidas >= VENDAS_PREMIO_MAXIMO) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Vendas encerradas. Aguarde o próximo sorteio."
+        );
+      }
+
+      /* ================= 🎟️ BUSCA CARTELA DISPONÍVEL ================= */
+      const cartelasQuery = await tx.get(
+        db
+          .collection("Cartelas")
+          .where("rodada", "==", rodada)
+          .where("status", "==", "disponivel")
+          .limit(1)
+      );
+
+      if (cartelasQuery.empty) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Nenhuma cartela disponível"
+        );
+      }
+
+      const cartelaDoc = cartelasQuery.docs[0];
+      const cartelaRef = cartelaDoc.ref;
+
+      /* ================= 💰 MARCA COMO VENDIDA ================= */
+      tx.update(cartelaRef, {
+        status: "vendida",
+        comprador: uid,
+        vendidaEm: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      /* ================= 📈 ATUALIZA CONTADOR GLOBAL ================= */
+      tx.update(statusRef, {
+        cartelasVendidas: admin.firestore.FieldValue.increment(1),
+        faltamCartelas: admin.firestore.FieldValue.increment(-1),
+        atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return {
+        cartelaId: cartelaDoc.id,
+        rodada,
+      };
+    });
+
+    /* ================= 🧠 ATUALIZA STATUS + SORTEIOS ================= */
+    await atualizarStatusSorteio(1);
+
+    return {
+      success: true,
+      ...resultado,
+    };
   });
 
 
@@ -1099,9 +1211,7 @@ async function verificarAntifraude({
   return { permitido: true };
 }
 
-/* ===============================
-   WORKER COMPRA (Cloud Tasks)
-================================ */
+
 /* ===============================
    WORKER PROCESSAR COMPRA COMPLETO
 ================================ */
@@ -1857,59 +1967,102 @@ async function atualizarStatusSorteio(qtdVendidas) {
   const ref = db.collection("StatusSorteio").doc("geral");
 
   let sorteioParaExecutar = null;
+  let resetRodada = false;
 
-  await db.runTransaction(async tx => {
+  await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
+
     const atual = snap.exists
       ? snap.data()
-      : { rodada: 1, cartelasVendidas: 0, ultimaMetaProcessada: 0 };
+      : {
+          rodada: 1,
+          cartelasVendidas: 0,
+          ultimaMetaProcessada: 0,
+        };
 
     const cartelasVendidas = (atual.cartelasVendidas || 0) + qtdVendidas;
-
-    let nivelSorteio = null;
-    let premioSorteio = 0;
     let ultimaMeta = atual.ultimaMetaProcessada || 0;
 
-    for (const meta of METAS) {
-      if (cartelasVendidas >= meta.cartelas && ultimaMeta < meta.cartelas) {
-        nivelSorteio = meta.nivel;
-        premioSorteio = meta.premio;
-        ultimaMeta = meta.cartelas;
+    let nivel = null;
+    let premioAtual = 0;
 
-        // 🔒 Guarda decisão para fora da transaction
+    /* ================= MINI PRÊMIOS ================= */
+    for (const meta of MINI_PREMIOS) {
+      if (cartelasVendidas >= meta.vendas && ultimaMeta < meta.vendas) {
+        nivel = `mini-${meta.vendas}`;
+        premioAtual = meta.premio;
+        ultimaMeta = meta.vendas;
+
         sorteioParaExecutar = {
           rodada: atual.rodada,
-          premio: premioSorteio,
-          nivel: nivelSorteio,
+          premio: premioAtual,
+          nivel,
         };
         break;
       }
     }
 
+    /* ================= PRÊMIO MÁXIMO ================= */
+    if (
+      cartelasVendidas >= VENDAS_PREMIO_MAXIMO &&
+      ultimaMeta < VENDAS_PREMIO_MAXIMO
+    ) {
+      nivel = "maximo";
+      premioAtual = PREMIO_MAXIMO;
+      ultimaMeta = VENDAS_PREMIO_MAXIMO;
+
+      sorteioParaExecutar = {
+        rodada: atual.rodada,
+        premio: PREMIO_MAXIMO,
+        nivel: "maximo",
+      };
+
+      resetRodada = true;
+    }
+
+    /* ================= ATUALIZA STATUS ================= */
     tx.set(
       ref,
       {
         rodada: atual.rodada,
         cartelasVendidas,
-        metaAtual: ultimaMeta,
-        nivel: nivelSorteio,
-        premioAtual: premioSorteio,
-        sorteioLiberado: !!sorteioParaExecutar,
         ultimaMetaProcessada: ultimaMeta,
-        faltamCartelas: TOTAL_CARTELAS - cartelasVendidas,
+        premioAtual,
+        nivel,
+        faltamCartelas: Math.max(
+          VENDAS_PREMIO_MAXIMO - cartelasVendidas,
+          0
+        ),
+        sorteioLiberado: !!sorteioParaExecutar,
         atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
   });
 
-  // 🚀 EXECUTA FORA DA TRANSACTION (correto)
+  /* ================= EXECUTA SORTEIO FORA DA TRANSACTION ================= */
   if (sorteioParaExecutar) {
     await sortearPremio(
       sorteioParaExecutar.premio,
       sorteioParaExecutar.nivel,
       sorteioParaExecutar.rodada
     );
+  }
+
+  /* ================= RESET AUTOMÁTICO DA RODADA ================= */
+  if (resetRodada) {
+    const ref = db.collection("StatusSorteio").doc("geral");
+
+    await ref.update({
+      rodada: admin.firestore.FieldValue.increment(1),
+      cartelasVendidas: 0,
+      ultimaMetaProcessada: 0,
+      premioAtual: 0,
+      nivel: null,
+      faltamCartelas: VENDAS_PREMIO_MAXIMO,
+      sorteioLiberado: false,
+      atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
   }
 }
 /* ===============================

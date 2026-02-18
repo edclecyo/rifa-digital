@@ -12,20 +12,31 @@ export default function CriarCartela() {
     try {
       setLoading(true);
 
-      // usa o functions já inicializado
       const criarCartelasFn = httpsCallable(functions, 'criarCartelasAutomatico');
 
       const res = await criarCartelasFn();
 
       Alert.alert(
         '✅ Sucesso',
-        `Cartelas criadas com sucesso\nRodada: ${res.data.rodada}`
+        `Cartelas criadas com sucesso!
+
+Rodada: ${res.data.rodada}
+Criadas agora: ${res.data.criadas}`
       );
     } catch (error) {
       console.log('❌ Erro criar cartelas:', error);
 
       if (error?.code === 'functions/unauthenticated') {
         Alert.alert('Login necessário', 'Você precisa estar logado como admin.');
+        return;
+      }
+
+      // 🚫 rodada já finalizada (12.500)
+      if (error?.message?.includes('Rodada finalizada')) {
+        Alert.alert(
+          'Rodada encerrada',
+          'As 12.500 cartelas já foram vendidas.\nAguardando sorteio e reset automático.'
+        );
         return;
       }
 
@@ -63,7 +74,7 @@ export default function CriarCartela() {
           marginBottom: 30,
         }}
       >
-        Geração automática até o limite de 1600 cartelas
+        Geração contínua até atingir 12.500 vendas na rodada
       </Text>
 
       <Pressable

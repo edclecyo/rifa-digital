@@ -181,13 +181,6 @@ export default function RankingPublico() {
         </View>
       )}
 
-      {/* 🔹 Status do sorteio */}
-      <Text style={{ color: '#94a3b8', marginBottom: 12 }}>
-        🎟️ Vendidas: {statusSorteio.cartelasVendidas} | 
-        Faltam: {statusSorteio.faltamCartelas} | 
-        Nível: {statusSorteio.nivel.toUpperCase()}
-      </Text>
-
       {/* 🔹 Ranking completo */}
       <FlatList
         ref={flatListRef} // 🔹 referência para scroll
