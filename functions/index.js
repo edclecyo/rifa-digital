@@ -8,15 +8,19 @@ const { exigirKycNivel } = require("./financeiro/kyc");
 const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
 const { PassThrough } = require("stream");
+const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 
 admin.initializeApp();
 const db = admin.firestore();
 const tasksClient = new CloudTasksClient();
-
+// ===============================
+// CONFIG MERCADO PAGO (TESTE)
+// ===============================
+const MP_ACCESS_TOKEN = "TEST-1979013561468328-120609-46c9306edddb678d5f2863a7ae8ccb79-114139372"; 
 /* ===============================
    CONFIGURAÇÕES
 ================================ */
-const SUPER_ADMIN_UID = "WttevCDh6haanBH0v98nggOsBm62";
+const SUPER_ADMIN_UID = "s7wrbiuWf0NQQOE82BFOnnWAW5n2";
 const TOTAL_CARTELAS = 1600;
 const NUMEROS_POR_CARTELA = 6;
 const LIMITE_BATCH = 500;
@@ -27,6 +31,14 @@ const VALOR_CARTELA = 2.5;
 const VERSAO_INICIAL = "1.0";
 const VERSAO_ATUAL = "1.0";
 
+const REGRAS_PREMIOS = [
+  { limite: 200, valor: 50 },
+  { limite: 300, valor: 100 },
+  { limite: 500, valor: 250 },
+  { limite: 1000, valor: 500 },
+];
+
+const GRANDE_PREMIO = { cartelas: 10000, valor: 5000 };
 
 /* ===============================
    METAS
@@ -71,13 +83,12 @@ exports.adminForcarRollback = functions.https.onCall(
   }
 );
 /* ===============================
-  registrarLogin
+  criarSuperAdmin
 ================================ */
-exports.registrarLogin = functions
+exports.criarSuperAdmin = functions
   .region('southamerica-east1')
-  .https.onCall(async (data, context) => {
+  .https.onCall(async (_, context) => {
 
-    // 🔐 1️⃣ Autenticação obrigatória
     if (!context.auth) {
       throw new functions.https.HttpsError(
         'permission-denied',
@@ -86,51 +97,134 @@ exports.registrarLogin = functions
     }
 
     const uid = context.auth.uid;
-    const { deviceId, platform } = data;
+    const email = context.auth.token.email;
 
-    if (!deviceId || !platform) {
-      throw new functions.https.HttpsError(
-        'invalid-argument',
-        'deviceId e platform são obrigatórios'
-      );
-    }
+    const bootstrapRef = db
+      .collection('BootstrapSuperAdmin')
+      .doc('config');
 
-    const userPrivRef = db.collection('UsuariosPrivado').doc(uid);
-    const deviceRef = userPrivRef.collection('Dispositivos').doc(deviceId);
-    const auditoriaRef = db.collection('AuditoriaLogin').doc();
+    const userRef = db
+      .collection('UsuariosPrivado')
+      .doc(uid);
 
     await db.runTransaction(async (tx) => {
 
-      // 🔎 Inicialização segura
-      const userSnap = await tx.get(userPrivRef);
-      if (!userSnap.exists) {
-        tx.set(userPrivRef, {
-          criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-          scoreAntifraude: 0,
-          bloqueado: false,
-        });
-      }
+      const bootstrapSnap = await tx.get(bootstrapRef);
 
-      const userData = userSnap.data() || {};
-      if (userData.bloqueado === true) {
+      if (!bootstrapSnap.exists) {
         throw new functions.https.HttpsError(
-          'permission-denied',
-          'Conta bloqueada por segurança'
+          'failed-precondition',
+          'Documento bootstrap não encontrado'
         );
       }
 
-      // 📱 Registrar dispositivo
+      const bootstrap = bootstrapSnap.data();
+
+      if (bootstrap.email !== email) {
+        throw new functions.https.HttpsError(
+          'permission-denied',
+          'Usuário não autorizado para bootstrap'
+        );
+      }
+
+      // 🔐 Promove usuário no Firestore
+      tx.set(
+        userRef,
+        {
+          email,
+          role: 'superAdmin',
+          isAdmin: true,
+          adminCriadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      // 🔒 Fecha bootstrap
+      tx.update(bootstrapRef, {
+        ativo: false,
+        email,
+        uid,
+        fechadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    // ⭐ PARTE QUE FALTAVA
+    await admin.auth().setCustomUserClaims(uid, { admin: true });
+
+    return {
+      ok: true,
+      message: 'Super Admin criado com sucesso',
+    };
+  });
+/* ===============================
+  registrarLogin
+================================ */
+exports.registrarLogin = functions
+  .region("southamerica-east1")
+  .runWith({ timeoutSeconds: 10 })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        "permission-denied",
+        "Usuário não autenticado"
+      );
+    }
+
+    const uid = context.auth.uid;
+    const deviceId = String(data?.deviceId || "").trim();
+    const platform = String(data?.platform || "unknown");
+
+    // 🔐 validação HARD
+    if (!deviceId) {
+      console.warn("⚠️ registrarLogin sem deviceId", { uid });
+      return { ok: false, ignored: true };
+    }
+
+    const userPrivRef = db.collection("UsuariosPrivado").doc(uid);
+    const deviceRef = userPrivRef.collection("Dispositivos").doc(deviceId);
+    const auditoriaRef = db.collection("AuditoriaLogin").doc();
+
+    // 🔎 conta dispositivos (fora da transaction, OK)
+    const devicesSnap = await userPrivRef
+      .collection("Dispositivos")
+      .get();
+
+    const totalDevices = devicesSnap.size;
+    const deviceJaExiste = devicesSnap.docs.some(d => d.id === deviceId);
+
+    // ⛔ regra antifraude ANTES da transaction
+    if (!deviceJaExiste && totalDevices >= 3) {
+      await userPrivRef.set({
+        bloqueado: true,
+        motivoBloqueio: "Múltiplos dispositivos",
+        bloqueadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      throw new functions.https.HttpsError(
+        "permission-denied",
+        "Conta bloqueada por segurança"
+      );
+    }
+
+    // 🔒 transaction SOMENTE para escrita
+    await db.runTransaction(async (tx) => {
+      const userSnap = await tx.get(userPrivRef);
+
+      if (!userSnap.exists) {
+        tx.set(userPrivRef, {
+          criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          bloqueado: false,
+          scoreAntifraude: 0,
+        });
+      }
+
       const deviceSnap = await tx.get(deviceRef);
+
       if (!deviceSnap.exists) {
         tx.set(deviceRef, {
           platform,
           criadoEm: admin.firestore.FieldValue.serverTimestamp(),
           ultimoLogin: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        // 🚨 Novo dispositivo → aumenta score
-        tx.update(userPrivRef, {
-          scoreAntifraude: admin.firestore.FieldValue.increment(25),
         });
       } else {
         tx.update(deviceRef, {
@@ -138,35 +232,137 @@ exports.registrarLogin = functions
         });
       }
 
-      // 📊 Contar dispositivos
-      const devicesSnap = await userPrivRef.collection('Dispositivos').get();
-      const totalDevices = devicesSnap.size;
-
-      // 🛑 Regra antifraude: bloqueia se >=4 dispositivos
-      if (totalDevices >= 4) {
-        tx.update(userPrivRef, {
-          bloqueado: true,
-          motivoBloqueio: 'Múltiplos dispositivos',
-          bloqueadoEm: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      }
-
-      // 📑 Auditoria de login
       tx.set(auditoriaRef, {
         uid,
         deviceId,
         platform,
         totalDevices,
+        tipo: "login",
         criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-        tipo: 'login',
         ip: context.rawRequest?.ip || null,
       });
     });
 
-    return {
-      ok: true,
-      message: 'Login registrado com sucesso',
-    };
+    return { ok: true };
+  });
+exports.checarPremios = functions
+  .region("southamerica-east1")
+  .https.onCall(async (_, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError(
+        "unauthenticated",
+        "Usuário não autenticado"
+      );
+    }
+
+    const lockRef = db.collection("Locks").doc("checarPremios");
+    const lockSnap = await lockRef.get();
+    if (lockSnap.exists && lockSnap.data().ativo) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Função já está em execução"
+      );
+    }
+
+    await lockRef.set({
+      ativo: true,
+      iniciadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      uid: context.auth.uid,
+    });
+
+    try {
+      // 🔹 Status atual da rodada
+      const statusRef = db.collection("StatusSorteio").doc("geral");
+      const statusSnap = await statusRef.get();
+      const rodadaAtual = statusSnap.exists ? statusSnap.data().rodada || 1 : 1;
+      const ultimaMetaProcessada = statusSnap.exists ? statusSnap.data().ultimaMetaProcessada || 0 : 0;
+
+      // 🔹 Total de cartelas vendidas nesta rodada
+      const cartelasSnap = await db
+        .collection("Cartelas")
+        .where("rodada", "==", rodadaAtual)
+        .where("status", "==", "vendido")
+        .get();
+      const totalVendidas = cartelasSnap.size;
+
+      // 🔹 Mini prêmios proporcionais
+      const premiosParaDistribuir = [];
+      for (const regra of REGRAS_PREMIOS) {
+        const qtdPremios = Math.floor(totalVendidas / regra.limite);
+        const qtdPrev = Math.floor(ultimaMetaProcessada / regra.limite);
+        const vezes = qtdPremios - qtdPrev;
+
+        for (let i = 0; i < vezes; i++) {
+          premiosParaDistribuir.push({ tipo: "mini", valor: regra.valor, limite: regra.limite });
+        }
+      }
+
+      // 🔹 Grande prêmio proporcional (só dispara quando atingido)
+      const grandePremioRef = db.collection("Rodadas").doc(`${rodadaAtual}_grandePremio`);
+      const grandePremioSnap = await grandePremioRef.get();
+      if (totalVendidas >= GRANDE_PREMIO.cartelas && !grandePremioSnap.exists) {
+        premiosParaDistribuir.push({ tipo: "grande", valor: GRANDE_PREMIO.valor });
+        await grandePremioRef.set({ entregue: true });
+      }
+
+      // Atualiza última meta processada
+      await statusRef.update({ ultimaMetaProcessada: totalVendidas });
+
+      // 🔹 Distribuição de prêmios por batch para escalabilidade
+      const usuariosSnap = await db.collection("UsuariosPrivado").get();
+      const usuarios = usuariosSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      const batchSize = 500; // limite do Firestore
+      let batch = db.batch();
+      let count = 0;
+
+      for (const premio of premiosParaDistribuir) {
+        if (usuarios.length === 0) break;
+
+        // Sorteia usuário proporcionalmente às suas cartelas vendidas
+        const vencedorIndex = Math.floor(Math.random() * usuarios.length);
+        const vencedor = usuarios[vencedorIndex];
+
+        const userRef = db.collection("UsuariosPrivado").doc(vencedor.id);
+        const novoSaldo = (vencedor.premios || 0) + premio.valor;
+        batch.set(userRef, { premios: novoSaldo }, { merge: true });
+
+        // Histórico individual
+        const historicoRef = userRef.collection("HistoricoPremios").doc();
+        batch.set(historicoRef, {
+          rodada: rodadaAtual,
+          tipo: premio.tipo,
+          valor: premio.valor,
+          criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Opcional: remover vencedor do array para evitar repetição
+        // usuarios.splice(vencedorIndex, 1);
+
+        count++;
+        if (count % batchSize === 0) {
+          await batch.commit();
+          batch = db.batch();
+        }
+      }
+
+      // Commit final
+      if (count % batchSize !== 0) {
+        await batch.commit();
+      }
+
+      return { success: true, rodada: rodadaAtual, premiosDistribuidos: premiosParaDistribuir };
+
+    } catch (error) {
+      console.error("Erro em checarPremios:", error);
+      throw new functions.https.HttpsError("internal", error.message || "Erro ao checar prêmios");
+    } finally {
+      // 🔓 Libera lock
+      await lockRef.set(
+        { ativo: false, finalizadoEm: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    }
   });
 
 /* ===============================
@@ -214,7 +410,7 @@ exports.adminBloquearUsuario = functions.https.onCall(
 ================================ */
 async function enqueueCompraTask({ uid, cartelas, nomeComprador, compraId }) {
   const project = process.env.GCP_PROJECT;
-  const location = 'us-central1';
+  const location = 'southamerica-east1';
   const queue = 'compras-cartelas';
   const url = `https://${location}-${project}.cloudfunctions.net/workerProcessarCompra`;
 
@@ -232,113 +428,607 @@ async function enqueueCompraTask({ uid, cartelas, nomeComprador, compraId }) {
   const parent = tasksClient.queuePath(project, location, queue);
   await tasksClient.createTask({ parent, task });
 }
+
+exports.processarFila = onDocumentCreated("fila/{id}", async (event) => {
+  const id = event.params.id;
+
+  await db.runTransaction(async (t) => {
+    const pedidoRef = db.collection("pedidos").doc(id);
+    const pedido = await t.get(pedidoRef);
+
+    if (!pedido.exists) return;
+
+    const { cartelas, userId } = pedido.data();
+
+    for (const n of cartelas) {
+      const cRef = db.collection("cartelas").doc(String(n));
+      const cDoc = await t.get(cRef);
+
+      if (!cDoc.exists || !cDoc.data().disponivel) {
+        t.update(pedidoRef, { status: "erro" });
+        return;
+      }
+
+      t.update(cRef, { disponivel: false, owner: userId });
+    }
+
+    t.update(pedidoRef, { status: "pago" });
+  });
+});
+
 /* ===============================
    CRIAR CARTELAS AUTOMÁTICO
 ================================ */
-exports.criarCartelasAutomatico = functions.https.onCall(
-  async (_, context) => {
-    // 🔐 Verifica admin
-    if (!context.auth || context.auth.uid !== SUPER_ADMIN_UID) {
-      throw new functions.https.HttpsError("permission-denied", "Acesso negado");
+exports.criarCartelasAutomatico = functions
+  .region("southamerica-east1")
+  .https.onCall(async (_, context) => {
+    /* ===============================
+       🔐 VERIFICA AUTENTICAÇÃO / ADMIN
+    =============================== */
+    if (
+      !context.auth ||
+      (context.auth.uid !== SUPER_ADMIN_UID &&
+        context.auth.token.admin !== true)
+    ) {
+      throw new functions.https.HttpsError(
+        "permission-denied",
+        "Acesso negado"
+      );
     }
 
-    const statusRef = db.collection("StatusSorteio").doc("geral");
-    const statusSnap = await statusRef.get();
-    const rodadaAtual = statusSnap.exists ? statusSnap.data().rodada || 1 : 1;
+    /* ===============================
+       🔒 LOCK GLOBAL ANTI-DUPLICAÇÃO
+    =============================== */
+    const lockRef = db.collection("Locks").doc("criarCartelas");
 
-    const cartelasRef = db.collection("Cartelas");
-    const existentesSnap = await cartelasRef.where('rodada', '==', rodadaAtual).get();
-    const existentes = existentesSnap.docs.map(d => d.id);
-
-    if (existentes.length >= TOTAL_CARTELAS)
+    const lockSnap = await lockRef.get();
+    if (lockSnap.exists && lockSnap.data().ativo === true) {
       throw new functions.https.HttpsError(
         "failed-precondition",
-        "Limite de cartelas atingido"
+        "Geração já está em andamento"
+      );
+    }
+
+    await lockRef.set({
+      ativo: true,
+      iniciadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      uid: context.auth.uid,
+    });
+
+    try {
+      /* ===============================
+         📊 STATUS DA RODADA
+      =============================== */
+      const statusRef = db.collection("StatusSorteio").doc("geral");
+      const statusSnap = await statusRef.get();
+
+      const rodadaAtual = statusSnap.exists
+        ? statusSnap.data().rodada || 1
+        : 1;
+
+      /* ===============================
+         🎟️ CARTELAS EXISTENTES
+      =============================== */
+      const cartelasRef = db.collection("Cartelas");
+
+      const existentesSnap = await cartelasRef
+        .where("rodada", "==", rodadaAtual)
+        .get();
+
+      const existentes = existentesSnap.docs.map((d) => d.id);
+
+      if (existentes.length >= TOTAL_CARTELAS) {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Limite de cartelas atingido"
+        );
+      }
+
+      /* ===============================
+         🏗️ CRIAÇÃO EM BATCH
+      =============================== */
+      let batch = db.batch();
+      let count = 0;
+      const codigosUsados = new Set(existentes);
+
+      for (let i = 1; i <= TOTAL_CARTELAS; i++) {
+        const id = `C${i.toString().padStart(4, "0")}`;
+        if (codigosUsados.has(id)) continue;
+
+        const numeros = [];
+        while (numeros.length < NUMEROS_POR_CARTELA) {
+          const n = Math.floor(Math.random() * 60) + 1;
+          if (!numeros.includes(n)) numeros.push(n);
+        }
+
+        batch.set(cartelasRef.doc(id), {
+          codigo: i,
+          numeros,
+          rodada: rodadaAtual,
+          status: "disponivel",
+          reservadaPor: null,
+          reservaExpiraEm: null,
+          nomeComprador: "",
+          criadaEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        codigosUsados.add(id);
+        count++;
+
+        if (count % LIMITE_BATCH === 0) {
+          await batch.commit();
+          batch = db.batch();
+        }
+      }
+
+      // 🔐 evita commit vazio
+      if (count % LIMITE_BATCH !== 0) {
+        await batch.commit();
+      }
+
+      /* ===============================
+         🔔 ATUALIZA STATUS DO SORTEIO
+      =============================== */
+      await atualizarStatusSorteio(0);
+
+      const statusAtualSnap = await statusRef.get();
+      const statusAtual = statusAtualSnap.exists ? statusAtualSnap.data() : {};
+
+      /* ===============================
+         🎯 METAS / SORTEIOS AUTOMÁTICOS
+      =============================== */
+      for (const meta of METAS) {
+        if (
+          statusAtual.cartelasVendidas >= meta.cartelas &&
+          (statusAtual.ultimaMetaProcessada || 0) < meta.cartelas
+        ) {
+          await sortearPremio(meta.premio, meta.nivel, rodadaAtual);
+
+          await statusRef.update({
+            ultimaMetaProcessada: meta.cartelas,
+          });
+        }
+      }
+
+      /* ===============================
+         ✅ RETORNO
+      =============================== */
+      return {
+        success: true,
+        rodada: rodadaAtual,
+        criadas: count,
+      };
+    } catch (error) {
+      console.error("❌ Erro criarCartelasAutomatico:", error);
+
+      throw new functions.https.HttpsError(
+        "internal",
+        error.message || "Erro ao criar cartelas"
+      );
+    } finally {
+      /* ===============================
+         🔓 LIBERA LOCK GLOBAL
+      =============================== */
+      await lockRef.set(
+        {
+          ativo: false,
+          finalizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+  });
+/* ===============================
+   reservarCartelas
+================================ */
+exports.reservarCartelas = functions
+  .region("southamerica-east1")
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError("unauthenticated", "Login necessário");
+    }
+
+    const uid = context.auth.uid;
+    const { cartelas, acao } = data;
+
+    if (!Array.isArray(cartelas) || cartelas.length === 0) {
+      throw new functions.https.HttpsError("invalid-argument", "Cartelas inválidas");
+    }
+
+    if (cartelas.length > 20) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Máximo de 20 cartelas por reserva"
+      );
+    }
+
+    const agora = Date.now();
+    const expiraEm = new Date(agora + 5 * 60 * 1000); // ⏱️ 5 minutos
+
+    const reservaRef = db.collection("Reservas").doc();
+
+    await db.runTransaction(async (tx) => {
+      const cartelaRefs = cartelas.map((id) =>
+        db.collection("Cartelas").doc(id)
       );
 
-    let batch = db.batch();
-    let count = 0;
-    const codigosUsados = new Set(existentes);
+      const snaps = await Promise.all(cartelaRefs.map((ref) => tx.get(ref)));
 
-    // 🔄 Cria cartelas até atingir TOTAL_CARTELAS
-    for (let i = 1; i <= TOTAL_CARTELAS; i++) {
-      const id = `C${i.toString().padStart(4, "0")}`;
-      if (codigosUsados.has(id)) continue; // não repete
+      for (let i = 0; i < snaps.length; i++) {
+        const snap = snaps[i];
 
-      const numeros = [];
-      while (numeros.length < NUMEROS_POR_CARTELA) {
-        const n = Math.floor(Math.random() * 60) + 1;
-        if (!numeros.includes(n)) numeros.push(n);
+        if (!snap.exists) {
+          throw new functions.https.HttpsError(
+            "not-found",
+            `Cartela ${cartelas[i]} não existe`
+          );
+        }
+
+        const c = snap.data();
+
+        // 🚫 já vendida
+        if (c.status === "vendida") {
+          throw new functions.https.HttpsError(
+            "failed-precondition",
+            `Cartela ${cartelas[i]} já vendida`
+          );
+        }
+
+        // =====================================================
+        // 🔄 CANCELAR RESERVA (clicou novamente na própria)
+        // =====================================================
+        if (acao === "cancelar") {
+          if (c.reservadaPor === uid) {
+            tx.update(cartelaRefs[i], {
+              status: "disponivel",
+              reservadaPor: null,
+              reservaExpiraEm: null,
+            });
+          }
+
+          continue;
+        }
+
+        // =====================================================
+        // 🟡 RESERVAR
+        // =====================================================
+
+        // ⏳ reservada por outro usuário ainda válida
+        if (
+          c.status === "reservada" &&
+          c.reservaExpiraEm?.toMillis() > agora &&
+          c.reservadaPor !== uid
+        ) {
+          throw new functions.https.HttpsError(
+            "aborted",
+            `Cartela ${cartelas[i]} já reservada`
+          );
+        }
+
+        // 🔐 trava cartela
+        tx.update(cartelaRefs[i], {
+          status: "reservada",
+          reservadaPor: uid,
+          reservaExpiraEm: expiraEm,
+        });
       }
 
-      batch.set(cartelasRef.doc(id), {
-        codigo: i,
-        numeros,
-        rodada: rodadaAtual,
-        status: "disponivel",
-        reservadaPor: null,
-        reservaExpiraEm: null,
-        nomeComprador: " ",
-        criadaEm: admin.firestore.FieldValue.serverTimestamp(),
+      // cria reserva SOMENTE se ação for reservar
+      if (acao !== "cancelar") {
+        tx.set(reservaRef, {
+          uid,
+          cartelas,
+          status: "ativa",
+          criadaEm: admin.firestore.FieldValue.serverTimestamp(),
+          expiraEm,
+        });
+      }
+    });
+
+    return {
+      ok: true,
+      expiraEm,
+    };
+  });
+
+/* ===============================
+   limparReservasExpiradas
+================================ */
+exports.limparReservasExpiradas = functions
+  .region("southamerica-east1")
+  .pubsub.schedule("* * * * *")
+  .onRun(async () => {
+    const agora = new Date();
+
+    const snap = await db
+      .collection("Reservas")
+      .where("status", "==", "ativa")
+      .where("expiraEm", "<=", agora)
+      .get();
+
+    if (snap.empty) return null;
+
+    const batch = db.batch();
+
+    for (const docSnap of snap.docs) {
+      const reserva = docSnap.data();
+
+      for (const id of reserva.cartelas) {
+        const ref = db.collection("Cartelas").doc(id);
+
+        batch.update(ref, {
+          status: "disponivel",
+          reservadaPor: null,
+          reservaExpiraEm: null,
+        });
+      }
+
+      batch.update(docSnap.ref, {
+        status: "expirada",
       });
-
-      codigosUsados.add(id);
-      count++;
-
-      if (count % LIMITE_BATCH === 0) {
-        await batch.commit();
-        batch = db.batch();
-      }
     }
 
     await batch.commit();
 
-    // 🔔 Atualiza status geral da rodada
-    await atualizarStatusSorteio(0); // 0 porque apenas criamos, não vendemos
+    console.log(`🧹 Reservas expiradas limpas: ${snap.size}`);
 
-    // 🔁 Dispara sorteio automático se metas forem atingidas
-    const statusAtualSnap = await statusRef.get();
-    const statusAtual = statusAtualSnap.exists ? statusAtualSnap.data() : {};
-    
-    for (const meta of METAS) {
-      if (
-        statusAtual.cartelasVendidas >= meta.cartelas &&
-        (statusAtual.ultimaMetaProcessada || 0) < meta.cartelas
-      ) {
-        // 🔥 Executa sorteio para essa meta
-        await sortearPremio(meta.premio, meta.nivel, rodadaAtual);
-
-        // 🔄 Atualiza ultima meta processada
-        await statusRef.update({
-          ultimaMetaProcessada: meta.cartelas,
-        });
-      }
-    }
-
-    return { success: true, rodada: rodadaAtual, criadas: count };
-  }
-);
-
-/* ===============================
-   CHECKOUT / CRIAR PEDIDO
-================================ */
-exports.criarCheckout = functions.https.onCall(async ({ cartelas }, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated');
-  const uid = context.auth.uid;
-
-  // Cria pedido
-  const pedidoRef = await db.collection('Pedidos').add({
-    uid,
-    cartelas,
-    status: 'pendente',
-    criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    return null;
   });
 
-  // Enfileira compra para processamento
-  await enqueueCompraTask({ uid, cartelas, nomeComprador: 'Usuário', compraId: pedidoRef.id });
 
-  return { pedidoId: pedidoRef.id };
-});
+exports.criarCheckout = functions
+  .region("southamerica-east1")
+  .runWith({ timeoutSeconds: 60, memory: "512MB" })
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError("unauthenticated", "Login necessário");
+    }
+
+    const uid = context.auth.uid;
+    const { cartelas = [], nomeComprador } = data;
+
+    if (!Array.isArray(cartelas) || cartelas.length === 0) {
+      throw new functions.https.HttpsError("invalid-argument", "Cartelas inválidas");
+    }
+
+    if (cartelas.length > 50) {
+      throw new functions.https.HttpsError(
+        "failed-precondition",
+        "Limite de 50 cartelas por compra"
+      );
+    }
+
+    const VALOR_CARTELA = 2.5;
+    const total = cartelas.length * VALOR_CARTELA;
+
+    const userRef = db.collection("UsuariosPrivado").doc(uid);
+    const pedidoRef = db.collection("Pedidos").doc();
+    const rankingRef = db.collection("RankingCompradores").doc(uid);
+    const historicoUserRef = userRef.collection("HistoricoCartelas");
+
+    await db.runTransaction(async (tx) => {
+      /* ================= TODOS OS READS PRIMEIRO ================= */
+
+      const userSnap = await tx.get(userRef);
+      if (!userSnap.exists) {
+        throw new functions.https.HttpsError("not-found", "Usuário não encontrado");
+      }
+
+      const rankingSnap = await tx.get(rankingRef);
+
+      const cartelaRefs = cartelas.map((id) => db.collection("Cartelas").doc(id));
+      const cartelaSnaps = [];
+
+      for (let i = 0; i < cartelaRefs.length; i++) {
+        const snap = await tx.get(cartelaRefs[i]);
+
+        if (!snap.exists) {
+          throw new functions.https.HttpsError("not-found", `Cartela ${cartelas[i]} não existe`);
+        }
+
+        const c = snap.data();
+
+        if (c.status !== "reservada" || c.reservadaPor !== uid) {
+          throw new functions.https.HttpsError(
+            "failed-precondition",
+            `Cartela ${cartelas[i]} não reservada por você`
+          );
+        }
+
+        cartelaSnaps.push({ ref: cartelaRefs[i], data: c });
+      }
+
+      /* ================= VALIDAÇÃO DE SALDO ================= */
+
+      const userData = userSnap.data() || {};
+
+      let saldoDeposito = Number(userData.saldo || 0);
+      let saldoCompart = Number(userData?.compartilhamento?.saldo || 0);
+
+      let saldoPremios = 0;
+      if (typeof userData.premios === "number") saldoPremios = userData.premios;
+      else if (typeof userData.premios?.saldo === "number") saldoPremios = userData.premios.saldo;
+
+      const saldoTotal = saldoDeposito + saldoCompart + saldoPremios;
+
+      if (saldoTotal < total) {
+        throw new functions.https.HttpsError("failed-precondition", "Saldo insuficiente");
+      }
+
+      /* ================= CÁLCULO DE DÉBITO ================= */
+
+      let restante = total;
+
+      const usar = (saldo) => {
+        const usado = Math.min(restante, saldo);
+        restante -= usado;
+        return saldo - usado;
+      };
+
+      saldoPremios = usar(saldoPremios);
+      saldoCompart = usar(saldoCompart);
+      saldoDeposito = usar(saldoDeposito);
+
+      const nomeFinal =
+        nomeComprador ||
+        userData.nome ||
+        context.auth.token.name ||
+        "Usuário";
+
+      /* ================= WRITES (SÓ AGORA) ================= */
+
+      tx.update(userRef, {
+        saldo: saldoDeposito,
+        "compartilhamento.saldo": saldoCompart,
+        "premios.saldo": saldoPremios,
+      });
+
+      cartelaSnaps.forEach(({ ref, data }, i) => {
+        tx.update(ref, {
+          status: "vendida",
+          reservadaPor: null,
+          reservaExpiraEm: null,
+          vendidaPor: uid,
+          nomeComprador: nomeFinal,
+          vendidaEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        tx.set(historicoUserRef.doc(), {
+          cartelaId: cartelas[i],
+          numeros: data.numeros || [],
+          valor: VALOR_CARTELA,
+          rodada: data.rodada,
+          compradaEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+
+      tx.set(pedidoRef, {
+        uid,
+        nomeComprador: nomeFinal,
+        cartelas,
+        total,
+        status: "pago",
+        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      if (!rankingSnap.exists) {
+        tx.set(rankingRef, {
+          nome: nomeFinal,
+          quantidade: cartelas.length,
+          total,
+          atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } else {
+        tx.update(rankingRef, {
+          nome: nomeFinal,
+          quantidade: admin.firestore.FieldValue.increment(cartelas.length),
+          total: admin.firestore.FieldValue.increment(total),
+          atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    });
+
+    return {
+      sucesso: true,
+      pedidoId: pedidoRef.id,
+      total,
+    };
+  });
+ /* ===============================
+     calcularScoreAntifraude
+  =============================== */
+async function calcularScoreAntifraude({ uid, ip, deviceId, valor }) {
+  let score = 0;
+
+  /* ===============================
+     MUITAS COMPRAS RÁPIDAS
+  =============================== */
+  const comprasRecentes = await db.collection("Pedidos")
+    .where("uid", "==", uid)
+    .where("criadoEm", ">", Date.now() - 5 * 60 * 1000) // 5 min
+    .get();
+
+  if (comprasRecentes.size >= 3) score += 25;
+
+  /* ===============================
+     MESMO IP EM VÁRIAS CONTAS
+  =============================== */
+  if (ip) {
+    const ipSnap = await db.collection("AntifraudeEventos")
+      .where("ip", "==", ip)
+      .limit(10)
+      .get();
+
+    const uids = new Set(ipSnap.docs.map(d => d.data().uid));
+    if (uids.size >= 3) score += 30;
+  }
+
+  /* ===============================
+     MESMO DEVICE
+  =============================== */
+  if (deviceId) {
+    const deviceSnap = await db.collection("AntifraudeEventos")
+      .where("deviceId", "==", deviceId)
+      .limit(5)
+      .get();
+
+    const uids = new Set(deviceSnap.docs.map(d => d.data().uid));
+    if (uids.size >= 2) score += 35;
+  }
+
+  /* ===============================
+     CONTA NOVA COM VALOR ALTO
+  =============================== */
+  const userSnap = await db.doc(`UsuariosPrivado/${uid}`).get();
+  const criadoEm = userSnap.data()?.criadoEm?.toMillis?.() || 0;
+
+  const contaNova = Date.now() - criadoEm < 24 * 60 * 60 * 1000;
+
+  if (contaNova && valor > 50) score += 40;
+
+  return score;
+}
+/* ===============================
+   classificarRisco
+================================ */
+function classificarRisco(score) {
+  if (score >= 70) return "ALTO";
+  if (score >= 40) return "MEDIO";
+  return "BAIXO";
+}
+/* ===============================
+   aplicarBloqueioSeNecessario
+================================ */
+async function aplicarBloqueioSeNecessario(uid, risco) {
+  if (risco !== "ALTO") return;
+
+  await db.doc(`UsuariosPrivado/${uid}`).set({
+    bloqueado: true,
+    bloqueadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    motivoBloqueio: "antifraude_automatico",
+  }, { merge: true });
+}
+/* ===============================
+   registrarEventoAntifraude
+================================ */
+async function registrarEventoAntifraude({
+  uid,
+  ip,
+  deviceId,
+  score,
+  risco,
+  pedidoId,
+}) {
+  await db.collection("AntifraudeEventos").add({
+    uid,
+    ip: ip || null,
+    deviceId: deviceId || null,
+    score,
+    risco,
+    pedidoId,
+    criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
 /* ===============================
    verificarAntifraude
 ================================ */
@@ -398,106 +1088,145 @@ async function verificarAntifraude({
 /* ===============================
    WORKER COMPRA (Cloud Tasks)
 ================================ */
-exports.workerProcessarCompra = functions.https.onRequest(async (req, res) => {
-  /* ===============================
-     🔐 PROTEÇÃO CLOUD TASKS
-  ================================ */
-  const taskName = req.headers["x-cloudtasks-taskname"];
-  if (!taskName) {
-    return res.status(403).send("Forbidden");
-  }
+exports.workerProcessarCompra = functions
+  .region("southamerica-east1")
+  .runWith({ memory: "512MB", timeoutSeconds: 60 })
+  .https.onRequest(async (req, res) => {
+    try {
+      const { compraId } = req.body;
+      if (!compraId) return res.sendStatus(400);
 
-  const { compraId } = req.body;
-  if (!compraId) {
-    return res.status(400).send("compraId obrigatório");
-  }
+      const pedidoRef = db.collection("Pedidos").doc(compraId);
 
-  const compraRef = db.collection("Compras").doc(compraId);
-  let compra;
+      await db.runTransaction(async (tx) => {
+        const pedidoSnap = await tx.get(pedidoRef);
+        if (!pedidoSnap.exists) throw new Error("Pedido não encontrado");
 
-  /* ===============================
-     🧠 FSM HARD + IDEMPOTÊNCIA
-  ================================ */
-  try {
-    await db.runTransaction(async (tx) => {
-      const snap = await tx.get(compraRef);
-      if (!snap.exists) {
-        throw new Error("Compra inexistente");
-      }
+        const pedido = pedidoSnap.data();
 
-      compra = snap.data();
+        // 🔒 IDEMPOTÊNCIA
+        if (pedido.status === "processado") return;
 
-      // 🔒 IDEMPOTÊNCIA ABSOLUTA
-      if (compra.status !== "PENDENTE") {
-        throw new Error(`Compra já processada (${compra.status})`);
-      }
+        const { uid, cartelas, valorTotal } = pedido;
 
-      // 🔐 Trava FSM
-      tx.update(compraRef, {
-        status: "PROCESSANDO",
-        processandoEm: admin.firestore.FieldValue.serverTimestamp(),
-        taskName, // auditoria
+        const userRef = db.collection("UsuariosPrivado").doc(uid);
+        const saldoSnap = await tx.get(userRef);
+const score = await calcularScoreAntifraude({
+  uid,
+  ip: req.headers["x-forwarded-for"],
+  deviceId: req.headers["x-device-id"],
+  valor: valorTotal,
+});
+
+const risco = classificarRisco(score);
+
+await registrarEventoAntifraude({
+  uid,
+  ip: req.headers["x-forwarded-for"],
+  deviceId: req.headers["x-device-id"],
+  score,
+  risco,
+  pedidoId: compraId,
+});
+
+/* ===============================
+   RISCO ALTO → CANCELA COMPRA
+=============================== */
+if (risco === "ALTO") {
+  tx.update(pedidoRef, {
+    status: "bloqueado_antifraude",
+    scoreAntifraude: score,
+  });
+
+  await aplicarBloqueioSeNecessario(uid, risco);
+  return;
+}
+        const saldoAtual = saldoSnap.data()?.saldo || 0;
+
+        // 💸 saldo insuficiente → rollback
+        if (saldoAtual < valorTotal) {
+          tx.update(pedidoRef, {
+            status: "falhou",
+            motivo: "saldo_insuficiente",
+            atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          return;
+        }
+
+        // 🔒 RESERVA DAS CARTELAS (anti-duplicação global)
+        for (const numero of cartelas) {
+          const cartelaRef = db.collection("Cartelas").doc(String(numero));
+          const cartelaSnap = await tx.get(cartelaRef);
+
+          if (!cartelaSnap.exists || cartelaSnap.data().status === "vendida") {
+            tx.update(pedidoRef, {
+              status: "falhou",
+              motivo: "cartela_indisponivel",
+              atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+            });
+            return;
+          }
+
+          tx.update(cartelaRef, {
+            status: "vendida",
+            uid,
+            pedidoId: compraId,
+            vendidoEm: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+
+        // 💰 LEDGER NEGATIVO (imutável)
+        tx.set(userRef.collection("LedgerFinanceiro").doc(), {
+          tipo: "compra_cartelas",
+          valor: -valorTotal,
+          referencia: compraId,
+          status: "confirmado",
+          criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // 💰 ATUALIZA SALDO DERIVADO
+        tx.update(userRef, {
+          saldo: admin.firestore.FieldValue.increment(-valorTotal),
+        });
+
+        // 📦 FINALIZA PEDIDO
+        tx.update(pedidoRef, {
+          status: "processado",
+          processadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
       });
-    });
-  } catch (err) {
-    // ⚠️ Task duplicada / replay → ACK silencioso
-    return res.status(200).send({ ok: true, ignored: true });
-  }
 
-  try {
-    /* ===============================
-       🛡️ ANTIFRAUDE
-    ================================ */
-    await avaliarRiscoAntifraude({
-      uid: compra.uid,
-      pedidoId: compraId,
-      ip: req.headers["x-forwarded-for"] || null,
-      deviceId: compra.deviceId || null,
-    });
+      return res.sendStatus(200);
+    } catch (err) {
+      console.error("❌ workerProcessarCompra:", err);
 
-    /* ===============================
-       💰 FINANCEIRO (LEDGER)
-    ================================ */
-    await registrarDebito(compraId);
+      /**
+       * MUITO IMPORTANTE:
+       * retornar 500 faz a Cloud Tasks tentar novamente
+       * → retry automático seguro
+       */
+      return res.sendStatus(500);
+    }
+  });
+  /* ===============================
+   congelarSaldo
+================================ */
+async function congelarSaldo(uid, valor) {
+  await db.doc(`UsuariosPrivado/${uid}`).update({
+    saldoCongelado: admin.firestore.FieldValue.increment(valor),
+  });
+}
 
-    /* ===============================
-       🎟️ CARTELAS (TRAVA HARD)
-    ================================ */
-    await venderCartelas(compraId);
+ /* ===============================
+   getFraudesRecentes
+================================ */
+exports.getFraudesRecentes = functions.https.onCall(async () => {
+  const snap = await db.collection("AntifraudeEventos")
+    .orderBy("criadoEm", "desc")
+    .limit(50)
+    .get();
 
-    /* ===============================
-       🔗 COMPARTILHAMENTO PAGO
-       (somente após compra válida)
-    ================================ */
-    await registrarCompartilhamentoAposCompra({
-      indicadoUid: compra.uid,
-    });
-
-    /* ===============================
-       ✅ FINALIZA FSM
-    ================================ */
-    await compraRef.update({
-      status: "PROCESSADA",
-      finalizadoEm: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return res.status(200).send({ ok: true });
-
-  } catch (err) {
-    console.error("🔥 Erro workerProcessarCompra:", err);
-
-    /* ===============================
-       ❌ ERRO CONTROLADO
-       (sem retry infinito)
-    ================================ */
-    await compraRef.update({
-      status: "ERRO",
-      erro: err.message,
-      erroEm: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    return res.status(500).send(err.message);
-  }
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 });
 
 /* ===============================
@@ -553,6 +1282,44 @@ async function processarCompra({ uid, cartelas, nomeComprador }) {
 
   return cartelasCompradas;
 }
+/* ===============================
+   criarPedido
+================================ */
+exports.criarPedido = functions
+  .region("southamerica-east1")
+  .https.onCall(async (data, context) => {
+    if (!context.auth) {
+      throw new functions.https.HttpsError("unauthenticated", "Login necessário");
+    }
+
+    const { cartelas = [], nomeComprador } = data;
+    const uid = context.auth.uid;
+
+    if (!cartelas.length) {
+      throw new functions.https.HttpsError("invalid-argument", "Cartelas vazias");
+    }
+
+    const compraRef = db.collection("Compras").doc();
+
+    await compraRef.set({
+      uid,
+      cartelas,
+      nomeComprador: nomeComprador || "Usuário",
+      status: "pendente",
+      criadaEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // envia para fila
+    await enqueueCompraTask({
+      uid,
+      cartelas,
+      nomeComprador,
+      compraId: compraRef.id,
+    });
+
+    return { ok: true };
+  });
+
 /* ===============================
    workerProcessarPedid
 ================================ */
@@ -1119,42 +1886,98 @@ exports.getDashboardResumo = functions
     };
   });
 /* ===============================
-   SORTEIO AUTOMÁTICO
+   SORTEIO AUTOMÁTICO SEGURO + AUDITÁVEL
 ================================ */
-async function sortearPremio(premio, nivel, rodadaId) {
+async function sortearPremioSeguro(premio, nivel, rodadaId) {
   const sorteioKey = `rodada_${rodadaId}_${nivel}`;
   const lockRef = db.collection("Locks").doc(sorteioKey);
 
-  await db.runTransaction(async tx => {
+  await db.runTransaction(async (tx) => {
     const lockSnap = await tx.get(lockRef);
     if (lockSnap.exists) return; // 🔒 já sorteado
 
+    /* ===============================
+       TOTAL DE CARTELAS VENDIDAS
+    =============================== */
+    const rodadaRef = db.collection("Rodadas").doc(String(rodadaId));
+    const rodadaSnap = await tx.get(rodadaRef);
+
+    const totalVendidas = rodadaSnap.data()?.vendidas || 0;
+    if (totalVendidas === 0) return;
+
+    /* ===============================
+       GERADOR AUDITÁVEL (SEED + HASH)
+    =============================== */
+    const timestamp = new Date().toISOString();
+    const seed = `rodada:${rodadaId}|nivel:${nivel}|data:${timestamp}`;
+
+    const hash = crypto.createHash("sha256").update(seed).digest("hex");
+
+    const indice = parseInt(hash.substring(0, 8), 16) % totalVendidas;
+
+    /* ===============================
+       BUSCA CARTELA PELO ÍNDICE
+    =============================== */
     const snap = await tx.get(
       db.collection("Cartelas")
         .where("rodada", "==", rodadaId)
         .where("status", "==", "vendida")
+        .orderBy("vendidaEm")
+        .limit(indice + 1)
     );
 
     if (snap.empty) return;
 
-    const vencedora = snap.docs[
-      Math.floor(Math.random() * snap.docs.length)
-    ];
+    const vencedora = snap.docs[indice];
+    const cartelaData = vencedora.data();
 
+    /* ===============================
+       🏆 SALVA GANHADOR OFICIAL
+    =============================== */
+    const ganhadorRef = db.collection("Ganhadores").doc();
+
+    tx.set(ganhadorRef, {
+      uid: cartelaData.uid,
+      nome: cartelaData.nomeComprador,
+      foto: cartelaData.foto || null,
+      valor: premio,
+      cartela: vencedora.id,
+      rodada: rodadaId,
+      nivel,
+
+      seed,   // transparência pública
+      hash,   // verificável
+      indice, // posição sorteada
+
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    /* ===============================
+       REGISTRA SORTEIO
+    =============================== */
     tx.set(db.collection("Sorteios").doc(sorteioKey), {
       rodadaId,
       cartelaId: vencedora.id,
       premio,
       nivel,
+
+      seed,
+      hash,
+      indice,
+
       criadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
 
+    /* ===============================
+       LOCK DE SEGURANÇA
+    =============================== */
     tx.set(lockRef, {
       executado: true,
       criadoEm: admin.firestore.FieldValue.serverTimestamp(),
     });
   });
 }
+
 /* ===============================
   verificarDepositosPendentes
 ================================ */
@@ -1233,9 +2056,7 @@ exports.verificarDepositosPendentes = functions.pubsub
    API — COMPRAR COM SALDO
 ================================ */
 exports.comprarComSaldo = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated");
-  }
+  if (!context.auth) throw new functions.https.HttpsError("unauthenticated");
 
   const uid = context.auth.uid;
   const { cartelas, nomeComprador } = data;
@@ -1245,7 +2066,7 @@ exports.comprarComSaldo = functions.https.onCall(async (data, context) => {
   }
 
   // 🔐 KYC
-  const userPrivado = await db.doc(`UsersPrivado/${uid}`).get();
+  const userPrivado = await db.doc(`UsuariosPrivado/${uid}`).get();
   if ((userPrivado.data()?.kycNivel || 0) < 2) {
     throw new functions.https.HttpsError(
       "failed-precondition",
@@ -1253,36 +2074,37 @@ exports.comprarComSaldo = functions.https.onCall(async (data, context) => {
     );
   }
 
-  // 🧾 Criar compra
-  const compraRef = db.collection("Compras").doc();
-  await compraRef.set({
+  // 🧾 cria pedido (PADRÃO ÚNICO)
+  const pedidoRef = db.collection("Pedidos").doc();
+  await pedidoRef.set({
     uid,
     nomeComprador,
     cartelas,
-    status: "PENDENTE",
+    status: "pendente",
     criadoEm: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  // ⚡ Criar task
-  const queuePath = client.queuePath(
-    process.env.GCP_PROJECT,
-    "us-central1",
-    "fila-compras"
-  );
+  // ⚡ enqueue Cloud Task
+  const project = process.env.GCP_PROJECT;
+  const location = "us-central1";
+  const queue = "compras-cartelas";
+
+  const parent = tasksClient.queuePath(project, location, queue);
 
   const task = {
     httpRequest: {
       httpMethod: "POST",
-      url: `https://us-central1-${process.env.GCP_PROJECT}.cloudfunctions.net/workerProcessarCompra`,
+      url: `https://${location}-${project}.cloudfunctions.net/workerProcessarCompra`,
       headers: { "Content-Type": "application/json" },
-      body: Buffer.from(JSON.stringify({ compraId: compraRef.id })).toString("base64"),
+      body: Buffer.from(JSON.stringify({ compraId: pedidoRef.id })).toString("base64"),
     },
   };
 
-  await client.createTask({ parent: queuePath, task });
+  await tasksClient.createTask({ parent, task });
 
-  return { ok: true, compraId: compraRef.id };
+  return { ok: true, pedidoId: pedidoRef.id };
 });
+
  /* ===============================
      rollbackPedidoFinanceiro
   ================================ */
@@ -1329,121 +2151,316 @@ async function rollbackPedidoFinanceiro({ uid, pedidoId, motivo }) {
     });
   });
 }
- /* ===============================
-     criarPixDeposito
-  ================================ */
-exports.criarPixDeposito = functions.https.onCall(async ({ valor }, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated');
-  if (valor < 5) throw new functions.https.HttpsError('invalid-argument');
+// ===============================
+// CRIAR PIX DE DEPÓSITO
+// ===============================
+const axios = require("axios");
 
-  const uid = context.auth.uid;
-  const txid = `PIX_${uid}_${Date.now()}`;
-
-  // 🔐 Cria registro local
-  const depRef = db
-    .collection('UsuariosPrivado')
-    .doc(uid)
-    .collection('Depositos')
-    .doc(txid);
-
-  await depRef.set({
-    valor,
-    txid,
-    status: 'pendente',
-    criadoEm: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  // 🔗 CHAMADA AO PSP PIX (exemplo)
-  const pix = await criarPixNoBanco({
-    valor,
-    txid,
-    descricao: 'Depósito saldo',
-  });
-
-  return {
-    txid,
-    qrCode: pix.qrCode,
-    copiaCola: pix.copiaCola,
-  };
-});
- /* ===============================
-    webhookPix
-  ================================ */
-exports.webhookPix = functions.https.onRequest(async (req, res) => {
-  try {
-    const { txid, valor, status } = req.body;
-
-    // 🔐 Validação básica
-    if (!txid || typeof valor !== 'number' || !status) {
-      return res.status(400).send('Payload inválido');
+ exports.criarPixDeposito = functions
+  .region("southamerica-east1")
+  .https.onCall(async ({ valor }, context) => {
+    // 🔒 Verifica autenticação
+    if (!context.auth) {
+      throw new functions.https.HttpsError("unauthenticated", "Usuário não autenticado");
     }
 
-    // ⛔ Ignora eventos não confirmados
-    if (status !== 'CONFIRMADO') {
-      return res.sendStatus(200);
+    // 💰 Validação de valor
+    if (!valor || valor < 5) {
+      throw new functions.https.HttpsError("invalid-argument", "Valor mínimo R$5");
     }
 
-    // 🔎 Localiza depósito (collectionGroup)
-    const snap = await db
-      .collectionGroup('Depositos')
-      .where('txid', '==', txid)
-      .limit(1)
-      .get();
+    const uid = context.auth.uid;
 
-    if (snap.empty) {
-      console.warn(`⚠️ Depósito não encontrado: ${txid}`);
-      return res.sendStatus(404);
-    }
+    // 🆔 Gera TXID único
+    const txid = `PIX_${uid}_${Date.now()}`;
 
-    const depDoc = snap.docs[0];
-    const deposito = depDoc.data();
+    // 📄 Referência do depósito
+    const depRef = db
+      .collection("UsuariosPrivado")
+      .doc(uid)
+      .collection("Depositos")
+      .doc(txid);
 
-    // 🔁 Idempotência HARD
-    if (deposito.status === 'confirmado') {
-      return res.sendStatus(200);
-    }
+    // 💾 Salva como pendente ANTES de criar o PIX
+    await depRef.set({
+      uid,
+      valor,
+      txid,
+      status: "pendente",
+      criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+    });
 
-    // 🧮 Validação de valor
-    if (deposito.valor !== valor) {
-      console.error(`❌ Valor divergente PIX ${txid}`);
-      return res.status(409).send('Valor divergente');
-    }
+    try {
+      // 🧾 Cria pagamento PIX no Mercado Pago
+      const response = await axios.post(
+        "https://api.mercadopago.com/v1/payments",
+        {
+          transaction_amount: Number(valor),
+          description: "Depósito de saldo",
+          payment_method_id: "pix",
+          external_reference: txid, // ← essencial para webhook/simulação
+          payer: {
+            email: "teste@email.com",
+          },
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
 
-    const uid = depDoc.ref.parent.parent.id;
-    const saldoRef = db.collection('UsuariosPrivado').doc(uid);
+      const data = response.data;
 
-    // 💰 CONCILIAÇÃO ATÔMICA
-    await db.runTransaction(async (tx) => {
-      // ➕ Credita saldo
-      tx.update(saldoRef, {
-        saldo: admin.firestore.FieldValue.increment(valor),
-        atualizadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      // 🔎 Extrai dados do QR Code com segurança
+      const transactionData =
+        data?.point_of_interaction?.transaction_data || {};
+
+      return {
+        txid,
+        qrCode: transactionData.qr_code_base64 || null,
+        copiaCola: transactionData.qr_code || null,
+      };
+    } catch (error) {
+      console.error("Erro ao criar PIX:", error.response?.data || error);
+
+      // ❌ Marca como erro no Firestore
+      await depRef.update({
+        status: "erro",
+        erro: error.message,
       });
 
-      // 🧾 Atualiza depósito
-      tx.update(depDoc.ref, {
-        status: 'confirmado',
+      throw new functions.https.HttpsError(
+        "internal",
+        "Falha ao gerar PIX no provedor"
+      );
+    }
+  });
+
+  
+exports.simularPagamentoPix = functions
+  .region("southamerica-east1")
+  .https.onCall(async ({ txid }, context) => {
+
+    if (!context.auth) {
+      throw new functions.https.HttpsError("unauthenticated", "Usuário não logado");
+    }
+
+    if (!txid) {
+      throw new functions.https.HttpsError("invalid-argument", "TXID não informado");
+    }
+
+    const uid = context.auth.uid;
+
+    const depRef = db
+      .collection("UsuariosPrivado")
+      .doc(uid)
+      .collection("Depositos")
+      .doc(txid);
+
+    const depSnap = await depRef.get();
+
+    if (!depSnap.exists) {
+      throw new functions.https.HttpsError("not-found", "Pagamento não encontrado");
+    }
+
+    const deposito = depSnap.data();
+
+    if (deposito.status === "confirmado") {
+      return { ok: true }; // já pago
+    }
+
+    const userRef = db.collection("UsuariosPrivado").doc(uid);
+
+    await db.runTransaction(async (tx) => {
+
+      tx.update(userRef, {
+        saldo: admin.firestore.FieldValue.increment(deposito.valor),
+      });
+
+      tx.update(depRef, {
+        status: "confirmado",
         confirmadoEm: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      // 📊 Ledger financeiro IMUTÁVEL
-      tx.set(saldoRef.collection('LedgerFinanceiro').doc(), {
-        tipo: 'deposito_pix',
+      tx.set(userRef.collection("LedgerFinanceiro").doc(), {
+        tipo: "deposito_pix_teste",
+        valor: deposito.valor,
+        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+    });
+
+    return { ok: true };
+  });
+
+
+  // ===============================
+// WEBHOOK PIX (CONFIRMA DEPÓSITO)
+// ===============================
+exports.webhookPix = functions
+  .region("southamerica-east1")
+  .https.onRequest(async (req, res) => {
+    try {
+      const { data } = req.body;
+
+      if (!data?.id) return res.sendStatus(200);
+ // ===============================
+      const pagamento = await axios.get(
+        `https://api.mercadopago.com/v1/payments/${data.id}`,
+        {
+          headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+        }
+      );
+
+      const pay = pagamento.data;
+
+      if (pay.status !== "approved") return res.sendStatus(200);
+
+      const txid = pay.external_reference;
+      const valor = pay.transaction_amount;
+
+      const snap = await db
+        .collectionGroup("Depositos")
+        .where("txid", "==", txid)
+        .limit(1)
+        .get();
+
+      if (snap.empty) return res.sendStatus(404);
+
+      const depDoc = snap.docs[0];
+      const deposito = depDoc.data();
+
+      if (deposito.status === "confirmado") return res.sendStatus(200);
+
+      const uid = depDoc.ref.parent.parent.id;
+      const saldoRef = db.collection("UsuariosPrivado").doc(uid);
+
+      await db.runTransaction(async (tx) => {
+        tx.update(saldoRef, {
+          saldo: admin.firestore.FieldValue.increment(valor),
+        });
+
+        tx.update(depDoc.ref, {
+          status: "confirmado",
+          confirmadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        tx.set(saldoRef.collection("LedgerFinanceiro").doc(), {
+          tipo: "deposito_pix",
+          valor,
+          criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      });
+
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error("Erro webhook:", error);
+      return res.sendStatus(500);
+    }
+  });
+
+
+ // ===============================
+// SOLICITAR SAQUE PIX
+// ===============================
+exports.solicitarSaquePix = functions
+  .region("southamerica-east1")
+  .https.onCall(async ({ valor, chavePix }, context) => {
+    if (!context.auth) throw new functions.https.HttpsError("unauthenticated");
+
+    if (!valor || valor < 10) {
+      throw new functions.https.HttpsError("invalid-argument", "Valor mínimo R$10");
+    }
+
+    const uid = context.auth.uid;
+    const userRef = db.collection("UsuariosPrivado").doc(uid);
+
+    await db.runTransaction(async (tx) => {
+      const userSnap = await tx.get(userRef);
+      const saldo = userSnap.data().saldo || 0;
+
+      if (saldo < valor) {
+        throw new functions.https.HttpsError("failed-precondition", "Saldo insuficiente");
+      }
+
+      tx.update(userRef, { saldo: saldo - valor });
+
+      tx.set(userRef.collection("Saques").doc(), {
         valor,
-        txid,
-        origem: 'PIX',
+        chavePix,
+        status: "pendente",
+        criadoEm: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      tx.set(userRef.collection("LedgerFinanceiro").doc(), {
+        tipo: "saque_pix",
+        valor: -valor,
         criadoEm: admin.firestore.FieldValue.serverTimestamp(),
       });
     });
 
-    console.log(`✅ PIX conciliado: ${txid} → UID ${uid}`);
-    return res.sendStatus(200);
+    return { ok: true };
+  });
 
-  } catch (error) {
-    console.error('🔥 Erro webhookPix:', error);
-    return res.status(500).send('Erro interno');
-  }
-});
+
+// ===============================
+// PROCESSAR SAQUES AUTOMÁTICOS
+// ===============================
+exports.processarSaquesPix = functions
+  .region("southamerica-east1")
+  .pubsub.schedule("every 1 minutes")
+  .onRun(async () => {
+    const snap = await db.collectionGroup("Saques").where("status", "==", "pendente").get();
+
+    for (const doc of snap.docs) {
+      const saque = doc.data();
+
+      try {
+        await axios.post(
+          "https://api.mercadopago.com/v1/transfers",
+          {
+            amount: saque.valor,
+            description: "Saque via PIX",
+            external_reference: doc.id,
+            pix_key: saque.chavePix,
+          },
+          {
+            headers: { Authorization: `Bearer ${MP_ACCESS_TOKEN}` },
+          }
+        );
+
+        await doc.ref.update({
+          status: "pago",
+          pagoEm: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (error) {
+        console.error("Erro ao pagar saque:", error.message);
+      }
+    }
+
+    return null;
+  });
+
+
+// ===============================
+// 🔌 MOCK DE ENVIO PIX (SUBSTITUIR PELO BANCO REAL)
+// ===============================
+async function enviarPixBanco({ valor, chavePix, identificador }) {
+  // ⚠️ AQUI você integra com:
+  // - Mercado Pago
+  // - Gerencianet
+  // - Asaas
+  // - Banco Inter
+  // - Banco do Brasil
+
+  // Simulação de sucesso
+  return {
+    ok: true,
+    txid: "PIX_" + identificador,
+  };
+}
 
  /* ===============================
     avaliarRiscoAntifraude
@@ -1596,9 +2613,7 @@ exports.onUserCreateGarantirLGPD = functions
       console.error("❌ LGPD onCreate:", err);
     }
   });
-/* ===============================
-   registrarAceiteLgpd (OFICIAL)
-================================ */
+
 /* ===============================
    registrarAceiteLgpd (COMPLETA)
 ================================ */

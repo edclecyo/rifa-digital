@@ -12,6 +12,7 @@ import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { auth, db } from "../services/firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useRoute } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export default function Register() {
   const route = useRoute();
@@ -19,19 +20,41 @@ export default function Register() {
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
-  const [codigoConvite, setCodigoConvite] = useState("");
+  const [codigoConvite, setCodigoConvite] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  /* 🔗 CAPTURA CÓDIGO DO DEEP LINK */
+  /* ===============================
+     🔗 DEEP LINK / REFERRAL
+  ================================ */
   useEffect(() => {
-    if (route.params?.codigo) {
-      setCodigoConvite(route.params.codigo);
-    }
-  }, [route.params]);
+    if (route?.params?.codigo) {
+      const codigo = String(route.params.codigo).trim();
+      setCodigoConvite(codigo);
 
+      // 🔒 salva para uso pós-login (useDeferredReferral)
+      AsyncStorage.setItem("referralCode", codigo);
+    }
+  }, [route?.params?.codigo]);
+
+  /* ===============================
+     📝 REGISTER
+  ================================ */
   async function handleRegister() {
-    if (!nome || !email || !senha) {
+    const nomeLimpo = nome.trim();
+    const emailLimpo = email.trim().toLowerCase();
+
+    if (!nomeLimpo || !emailLimpo || !senha) {
       Alert.alert("Erro", "Preencha todos os campos.");
+      return;
+    }
+
+    if (!emailLimpo.includes("@")) {
+      Alert.alert("Erro", "Email inválido.");
+      return;
+    }
+
+    if (senha.length < 6) {
+      Alert.alert("Erro", "A senha deve ter no mínimo 6 caracteres.");
       return;
     }
 
@@ -41,32 +64,32 @@ export default function Register() {
       /* 🔐 CRIA USUÁRIO */
       const cred = await createUserWithEmailAndPassword(
         auth,
-        email.trim(),
+        emailLimpo,
         senha
       );
 
       const user = cred.user;
 
       /* 👤 DISPLAY NAME */
-      await updateProfile(user, { displayName: nome });
+      await updateProfile(user, { displayName: nomeLimpo });
 
       /* 📄 USUÁRIO PÚBLICO */
-      await setDoc(doc(db, "Usuarios", user.uid), {
-        uid: user.uid,
-        nome,
-        email: user.email,
-        tipo: "user",
-        criadoEm: serverTimestamp(),
+await setDoc(doc(db, "Usuarios", user.uid), {
+  uid: user.uid,
+  nome: nomeLimpo,
+  email: user.email,
+  isAdmin: false,
+  criadoEm: serverTimestamp(),
 
-        // 🔗 CONVITE
-        codigoConvite: codigoConvite || null,
-        conviteValidado: false,
+  // 🔗 INDICAÇÃO
+  codigoConvite: codigoConvite ?? null,
+  conviteValidado: false,
 
-        compartilhamento: {
-          codigo: null,
-          uso: 0,
-        },
-      });
+  compartilhamento: {
+    codigo: null,
+    uso: 0,
+  },
+});
 
       /* 🔒 USUÁRIO PRIVADO */
       await setDoc(
@@ -75,6 +98,11 @@ export default function Register() {
           criadoEm: serverTimestamp(),
           bloqueado: false,
           scoreAntifraude: 0,
+          consentimentoLGPD: {
+            aceito: false,
+            versao: "1.0",
+            data: null,
+          },
         },
         { merge: true }
       );
@@ -88,6 +116,8 @@ export default function Register() {
         msg = "Este email já está em uso.";
       else if (err.code === "auth/weak-password")
         msg = "A senha deve ter pelo menos 6 caracteres.";
+      else if (err.code === "auth/invalid-email")
+        msg = "Email inválido.";
 
       Alert.alert("Erro", msg);
     } finally {

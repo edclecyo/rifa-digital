@@ -7,13 +7,15 @@ export default function HomeAdmin({ navigation }) {
 
   // 🔐 PROTEÇÃO ABSOLUTA — TOKEN ADMIN
   useEffect(() => {
-    if (!loading && !isAdmin) {
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Home' }],
-      });
-    }
-  }, [loading, isAdmin]);
+  if (loading) return;
+
+  if (!isAdmin) {
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Home' }],
+    });
+  }
+}, [loading, isAdmin, navigation]);
 
   // ⏳ Enquanto valida token
   if (loading) {
@@ -34,7 +36,11 @@ export default function HomeAdmin({ navigation }) {
     );
   }
 
-  if (!isAdmin) return null;
+ if (!isAdmin) {
+  return (
+    <View style={{ flex: 1, backgroundColor: '#020617' }} />
+  );
+}
 
   return (
     <View style={{ flex: 1, backgroundColor: '#0f172a', padding: 20 }}>
@@ -48,27 +54,31 @@ export default function HomeAdmin({ navigation }) {
         </Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+  showsVerticalScrollIndicator={false}
+  contentContainerStyle={{ paddingBottom: 40 }}
+>
 
         {/* 🚨 ANTIFRAUDE */}
         <Pressable
-          onPress={() => navigation.navigate('AntifraudeAdmin')}
-          style={{
-            backgroundColor: '#7c2d12',
-            padding: 22,
-            borderRadius: 16,
-            marginBottom: 20,
-            borderWidth: 1,
-            borderColor: '#fb923c',
-          }}
-        >
-          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-            🚨 Antifraude & Auditoria
-          </Text>
-          <Text style={{ color: '#fed7aa', marginTop: 4 }}>
-            IP, dispositivo, compras suspeitas e bloqueios
-          </Text>
-        </Pressable>
+  onPress={() => navigation.navigate('AntifraudeAdmin')}
+  android_ripple={{ color: '#00000020' }}
+  style={{
+    backgroundColor: '#7c2d12',
+    padding: 22,
+    borderRadius: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#fb923c',
+  }}
+>
+  <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
+    🚨 Antifraude & Auditoria
+  </Text>
+  <Text style={{ color: '#fed7aa', marginTop: 4 }}>
+    IP, dispositivo, compras suspeitas e bloqueios
+  </Text>
+</Pressable>
 {/* 📄 Compliance & LGPD */}
 <Pressable
   onPress={() => navigation.navigate('AdminCompliance')}
@@ -207,13 +217,13 @@ export default function HomeAdmin({ navigation }) {
         </Text>
 
         <Pressable
-          onPress={logout}
-          style={{
-            backgroundColor: '#dc2626',
-            padding: 14,
-            borderRadius: 12,
-            alignItems: 'center',
-          }}
+          onPress={async () => {
+  try {
+    await logout();
+  } catch (e) {
+    console.error('Erro ao sair', e);
+  }
+}}
         >
           <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>
             Sair da Conta

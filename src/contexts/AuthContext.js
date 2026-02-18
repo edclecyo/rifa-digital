@@ -1,82 +1,127 @@
-import { createContext, useEffect, useState } from 'react';
-import { Platform } from 'react-native';
-import { onAuthStateChanged, signOut, getIdTokenResult } from 'firebase/auth';
-import { auth, db, functions } from '../services/firebase';
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import * as Notifications from 'expo-notifications';
-import * as Application from 'expo-application';
-import Constants from 'expo-constants';
+import { createContext, useEffect, useState, useRef } from "react";
+import { Platform } from "react-native";
+import { onAuthStateChanged, signOut, getIdTokenResult } from "firebase/auth";
+import { auth, db, functions } from "../services/firebase";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
+import * as Notifications from "expo-notifications";
+import * as Application from "expo-application";
+import Constants from "expo-constants";
+
+// 🔗 REFERRAL (IMPORTANTE)
+import { useReferral } from "../hooks/useReferral";
 
 export const AuthContext = createContext({});
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   // 🔐 LGPD
   const [lgpdAceita, setLgpdAceita] = useState(false);
-  const [lgpdVersao, setLgpdVersao] = useState(null);
 
-  // 📱 Device ID (async)
+  // 📱 Device ID
   const [deviceId, setDeviceId] = useState(null);
 
+  // 🔒 Side-effects UMA vez
+  const loginSentRef = useRef(false);
+  const pushSentRef = useRef(false);
+
   /* ===============================
-     DEVICE ID
+     🔗 REFERRAL (SEMPRE NO TOPO)
+  ================================ */
+  useReferral(user?.uid);
+
+  /* ===============================
+     📱 DEVICE ID
   ================================ */
   useEffect(() => {
-    async function loadDeviceId() {
+    let active = true;
+
+    (async () => {
       try {
-        if (Platform.OS === 'android') {
-          const id = await Application.getAndroidIdAsync();
-          setDeviceId(id ?? 'android-emulator');
+        let id = "unknown-device";
+
+        if (Platform.OS === "android") {
+          id = (await Application.getAndroidIdAsync()) ?? id;
         } else {
-          const id = await Application.getIosIdForVendorAsync();
-          setDeviceId(id ?? 'ios-simulator');
+          id = (await Application.getIosIdForVendorAsync()) ?? id;
         }
+
+        if (active) setDeviceId(id);
       } catch {
-        setDeviceId('unknown-device');
+        if (active) setDeviceId("unknown-device");
       }
-    }
-    loadDeviceId();
+    })();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   /* ===============================
-     NOTIFICAÇÕES
+     🔄 LGPD
   ================================ */
-  async function configureAndroidChannel() {
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'default',
-        importance: Notifications.AndroidImportance.MAX,
-      });
+  async function carregarLgpd(uid) {
+    try {
+      const snap = await getDoc(doc(db, "UsuariosPrivado", uid));
+      const consentimento = snap.data()?.consentimentoLGPD;
+
+      const aceita =
+        consentimento?.aceito === true &&
+        consentimento?.versao === "1.0";
+
+      setLgpdAceita(!!aceita);
+      return aceita;
+    } catch (err) {
+      console.error("❌ LGPD:", err);
+      setLgpdAceita(false);
+      return false;
     }
   }
 
+  async function refreshLgpd(uid) {
+    if (!uid) return;
+    await carregarLgpd(uid);
+  }
+
+  /* ===============================
+     🔔 PUSH
+  ================================ */
   async function registerForPushNotifications(uid) {
+    if (!uid || pushSentRef.current) return;
+    pushSentRef.current = true;
+
     try {
       const { status } = await Notifications.getPermissionsAsync();
       let finalStatus = status;
 
-      if (status !== 'granted') {
+      if (status !== "granted") {
         const req = await Notifications.requestPermissionsAsync();
         finalStatus = req.status;
       }
 
-      if (finalStatus !== 'granted') return;
+      if (finalStatus !== "granted") return;
 
-      await configureAndroidChannel();
+      if (Platform.OS === "android") {
+        await Notifications.setNotificationChannelAsync("default", {
+          name: "default",
+          importance: Notifications.AndroidImportance.MAX,
+        });
+      }
 
       const projectId =
         Constants.expoConfig?.extra?.eas?.projectId ??
         Constants.easConfig?.projectId;
 
-      const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+      const token = (
+        await Notifications.getExpoPushTokenAsync({ projectId })
+      ).data;
 
       await setDoc(
-        doc(db, 'UsuariosPrivado', uid),
+        doc(db, "UsuariosPrivado", uid),
         {
           expoPushToken: token,
           platform: Platform.OS,
@@ -86,107 +131,99 @@ export function AuthProvider({ children }) {
         { merge: true }
       );
     } catch (err) {
-      console.error('❌ Push Token:', err);
+      console.warn("⚠️ Push:", err);
     }
   }
 
-
   /* ===============================
-     🔄 CARREGAR LGPD
+     🔗 LOGIN BACKEND
   ================================ */
-  async function carregarLgpd(uid) {
-  try {
-    const snap = await getDoc(doc(db, "UsuariosPrivado", uid));
+  async function registrarLogin({ deviceId, platform }) {
+    if (!deviceId) return;
 
-    if (!snap.exists()) {
-      setLgpdAceita(false);
-      return false;
-    }
-
-    const consentimento = snap.data()?.consentimentoLGPD;
-    const aceita = consentimento?.aceito === true;
-
-    setLgpdAceita(aceita);
-    return aceita;
-  } catch (err) {
-    console.error("❌ Erro carregar LGPD:", err);
-    setLgpdAceita(false);
-    return false;
-  }
-}
-
-  /* ===============================
-     🔄 REFRESH LGPD (usado no Modal)
-  ================================ */
-  async function refreshLgpd(uid) {
-  const snap = await getDoc(doc(db, "UsuariosPrivado", uid));
-
-  const aceita =
-    snap.exists() &&
-    snap.data()?.consentimentoLGPD?.aceito === true;
-
-  setLgpdAceita(aceita);
-}
- 
-  /* ===============================
-     LOGIN BACKEND
-  ================================ */
-  async function registrarLogin() {
     try {
-      const call = httpsCallable(functions, 'registrarLogin');
+      await auth.currentUser?.getIdToken(true);
 
+      const call = httpsCallable(functions, "registrarLogin");
       await call({
-        deviceId: deviceId ?? 'emulator',
-        platform: Platform.OS ?? 'unknown',
+        deviceId,
+        platform: platform ?? "unknown",
       });
     } catch (err) {
-      if (err?.code === 'functions/permission-denied') {
-        await signOut(auth);
+      if (err?.code === "functions/permission-denied") {
+        try {
+          await signOut(auth);
+        } catch {}
       }
-      console.warn('⚠️ registrarLogin:', err?.code);
+
+      console.warn("⚠️ registrarLogin:", err?.code ?? err?.message);
     }
   }
 
   /* ===============================
-     AUTH STATE
+     🔐 AUTH STATE
   ================================ */
   useEffect(() => {
-  const unsub = onAuthStateChanged(auth, async (authUser) => {
-    if (!authUser) {
-      setUser(null);
-      setProfile(null);
-      setIsAdmin(false);
-      setLgpdAceita(false);
-      setLoading(false);
-      return;
-    }
+    let active = true;
 
-    try {
-      setLoading(true); // 🔒 trava tudo aqui
+    const unsub = onAuthStateChanged(auth, async (authUser) => {
+      if (!active) return;
 
-      const token = await getIdTokenResult(authUser, true);
-      setIsAdmin(token.claims?.admin === true);
+      if (!authUser) {
+        setUser(null);
+        setProfile(null);
+        setIsAdmin(false);
+        setLgpdAceita(false);
+        setLoading(false);
+        loginSentRef.current = false;
+        pushSentRef.current = false;
+        return;
+      }
 
-      const snap = await getDoc(doc(db, "Usuarios", authUser.uid));
-      setProfile(snap.exists() ? snap.data() : {});
+      try {
+        setLoading(true);
 
-      setUser(authUser);
+        const token = await getIdTokenResult(authUser);
+        const admin = token.claims?.admin === true;
 
-      // ✅ AGUARDA LGPD
-      await carregarLgpd(authUser.uid);
+        const snap = await getDoc(doc(db, "Usuarios", authUser.uid));
+        const profileData = snap.exists() ? snap.data() : {};
 
-      // 🔕 não precisa travar UI
-      registerForPushNotifications(authUser.uid);
-      registrarLogin();
-    } catch (err) {
-      console.error("❌ AuthContext:", err);
-    } finally {
-      setLoading(false); // 🔓 só libera depois da LGPD
-    }
-  });
+        await carregarLgpd(authUser.uid);
 
-  return unsub;
-}, [deviceId]);
+        if (!active) return;
+
+        setIsAdmin(admin);
+        setProfile(profileData);
+        setUser(authUser);
+      } catch (err) {
+        console.error("❌ AuthContext:", err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    });
+
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, []);
+
+  /* ===============================
+     🚀 SIDE EFFECTS PÓS LOGIN
+  ================================ */
+  useEffect(() => {
+    if (!user || !deviceId || loginSentRef.current) return;
+
+    loginSentRef.current = true;
+
+    registrarLogin({
+      deviceId,
+      platform: Platform.OS,
+    });
+
+    registerForPushNotifications(user.uid);
+  }, [user, deviceId]);
 
   /* ===============================
      🚪 LOGOUT
@@ -197,21 +234,23 @@ export function AuthProvider({ children }) {
     setProfile(null);
     setIsAdmin(false);
     setLgpdAceita(false);
+    loginSentRef.current = false;
+    pushSentRef.current = false;
   }
 
   return (
     <AuthContext.Provider
-  value={{
-    user,
-    profile,
-    loading,
-    isAdmin,
-    lgpdAceita,
-    lgpdPendente: !!user && !lgpdAceita,
-    refreshLgpd,
-    logout,
-  }}
->
+      value={{
+        user,
+        profile,
+        loading,
+        isAdmin,
+        lgpdAceita,
+        lgpdPendente: !!user && !lgpdAceita,
+        refreshLgpd,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

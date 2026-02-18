@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useContext } from 'react';
+import React, { useEffect, useState, useContext, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,66 +13,98 @@ import {
   onSnapshot,
   query,
   orderBy,
-  doc,
   limit,
+  startAfter,
+  getDocs,
+  doc,
 } from 'firebase/firestore';
+
+const PAGE_SIZE = 100;
 
 export default function HistoricoCartelas() {
   const { user } = useContext(AuthContext);
 
   const [cartelas, setCartelas] = useState([]);
-  const [statusSorteio, setStatusSorteio] = useState(null);
-  const [ranking, setRanking] = useState([]);
+  const [lastDoc, setLastDoc] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
+  const [statusSorteio, setStatusSorteio] = useState(null);
 
   useEffect(() => {
     if (!user?.uid) return;
 
-    // 🔹 Histórico Cartelas do usuário
-    const qCartelas = query(
-      collection(db, 'Usuarios', user.uid, 'HistoricoCartelas'),
-      orderBy('compradaEm', 'desc')
-    );
+    const loadInitial = async () => {
+      try {
+        const q = query(
+          collection(db, 'Usuarios', user.uid, 'HistoricoCartelas'),
+          orderBy('compradaEm', 'desc'),
+          limit(PAGE_SIZE)
+        );
 
-    const unsubCartelas = onSnapshot(qCartelas, snap => {
-      setCartelas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setLoading(false);
-    });
+        const snap = await getDocs(q);
 
-    // 🔹 Status geral do sorteio
+        setCartelas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setLastDoc(snap.docs[snap.docs.length - 1] || null);
+        setHasMore(snap.docs.length === PAGE_SIZE);
+      } catch (e) {
+        console.log('Erro ao carregar cartelas:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadInitial();
+
     const refStatus = doc(db, 'StatusSorteio', 'geral');
     const unsubStatus = onSnapshot(refStatus, snap => {
       if (snap.exists()) setStatusSorteio(snap.data());
     });
 
-    // 🔹 Ranking top 5 compradores
-    const qRanking = query(
-      collection(db, 'RankingCompradores'),
-      orderBy('quantidade', 'desc'),
-      limit(5)
-    );
-    const unsubRanking = onSnapshot(qRanking, snap => {
-      setRanking(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-
-    return () => {
-      unsubCartelas();
-      unsubStatus();
-      unsubRanking();
-    };
+    return () => unsubStatus();
   }, [user?.uid]);
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || loadingMore || !lastDoc || !user?.uid) return;
+
+    setLoadingMore(true);
+
+    try {
+      const q = query(
+        collection(db, 'Usuarios', user.uid, 'HistoricoCartelas'),
+        orderBy('compradaEm', 'desc'),
+        startAfter(lastDoc),
+        limit(PAGE_SIZE)
+      );
+
+      const snap = await getDocs(q);
+
+      const newDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      setCartelas(prev => [...prev, ...newDocs]);
+      setLastDoc(snap.docs[snap.docs.length - 1] || null);
+      setHasMore(snap.docs.length === PAGE_SIZE);
+    } catch (e) {
+      console.log('Erro ao carregar mais:', e);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [hasMore, loadingMore, lastDoc, user?.uid]);
 
   const formatarData = timestamp => {
     if (!timestamp?.toDate) return '—';
     return timestamp.toDate().toLocaleString('pt-BR');
   };
 
-  const corNivel = nivel => {
-    if (nivel === 'vermelho') return '#f87171';
-    if (nivel === 'verde') return '#34d399';
-    if (nivel === 'dourado') return '#facc15';
-    return '#d1d5db';
-  };
+  const renderItem = ({ item }) => (
+    <View style={styles.card}>
+      <Text style={styles.codigo}>🎟️ Cartela #{item.codigo || item.id}</Text>
+      <Text>Status: {item.status}</Text>
+      <Text>💰 R$ {Number(item.valor || 0).toFixed(2)}</Text>
+      <Text>🕒 {formatarData(item.compradaEm)}</Text>
+    </View>
+  );
 
   if (loading) {
     return (
@@ -84,15 +116,8 @@ export default function HistoricoCartelas() {
 
   return (
     <View style={styles.container}>
-      {/* 🏆 STATUS DO SORTEIO */}
       {statusSorteio && (
-        <View style={styles.statusContainer}>
-          <Text style={styles.statusText}>
-            Nível atual:{' '}
-            <Text style={{ fontWeight: 'bold', color: corNivel(statusSorteio.nivel) }}>
-              {statusSorteio.nivel}
-            </Text>
-          </Text>
+        <View style={styles.statusBox}>
           <Text style={styles.statusText}>Cartelas vendidas: {statusSorteio.cartelasVendidas}</Text>
           <Text style={styles.statusText}>Faltam: {statusSorteio.faltamCartelas}</Text>
           <Text style={styles.statusText}>
@@ -101,64 +126,44 @@ export default function HistoricoCartelas() {
         </View>
       )}
 
-      {/* 🎟️ CARTELAS */}
-      <Text style={styles.sectionTitle}>Minhas Cartelas</Text>
-      {cartelas.length === 0 ? (
-        <Text style={styles.emptyText}>Você ainda não comprou nenhuma cartela</Text>
-      ) : (
-        <FlatList
-          data={cartelas}
-          keyExtractor={item => item.id}
-          renderItem={({ item }) => (
-            <View style={[styles.card, { borderColor: corNivel(statusSorteio?.nivel) }]}>
-              <Text style={styles.codigo}>🎟️ Cartela #{item.codigo || item.id}</Text>
-              <Text>Status: {item.status}</Text>
-              <Text>💰 R$ {Number(item.valor || 2.5).toFixed(2)}</Text>
-              <Text style={{ marginVertical: 4 }}>👤 Comprador: {item.userNome || 'Usuário'}</Text>
-              <Text>🕒 Comprada em: {formatarData(item.compradaEm)}</Text>
-            </View>
-          )}
-          initialNumToRender={10}
-          maxToRenderPerBatch={15}
-          windowSize={11}
-          removeClippedSubviews={true}
-        />
-      )}
-
-      {/* 🏆 RANKING */}
-      <Text style={styles.sectionTitle}>Top Compradores</Text>
-      {ranking.length === 0 ? (
-        <Text style={styles.emptyText}>Nenhum comprador ainda</Text>
-      ) : (
-        <FlatList
-          data={ranking}
-          keyExtractor={item => item.id}
-          renderItem={({ item, index }) => (
-            <View style={styles.rankingCard}>
-              <Text style={{ fontWeight: 'bold' }}>
-                {index + 1}º {item.nome || 'Usuário'}
-              </Text>
-              <Text>🎟️ {item.quantidade} cartelas</Text>
-              <Text>💰 R$ {Number(item.total || 0).toFixed(2)}</Text>
-            </View>
-          )}
-          initialNumToRender={5}
-          maxToRenderPerBatch={5}
-          windowSize={7}
-        />
-      )}
+      <FlatList
+        data={cartelas}
+        keyExtractor={item => item.id}
+        renderItem={renderItem}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.4}
+        ListFooterComponent={
+          loadingMore ? <ActivityIndicator style={{ margin: 16 }} /> : null
+        }
+        initialNumToRender={12}
+        maxToRenderPerBatch={12}
+        windowSize={9}
+        removeClippedSubviews
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: '#fff' },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  statusContainer: { marginBottom: 16, padding: 12, borderRadius: 12, backgroundColor: '#e0f2fe' },
-  statusText: { fontSize: 16, marginBottom: 4, color: '#0c4a6e' },
-  sectionTitle: { fontSize: 20, fontWeight: 'bold', marginVertical: 12 },
-  card: { padding: 14, marginBottom: 10, borderRadius: 12, borderWidth: 2, backgroundColor: '#f3f4f6' },
-  codigo: { fontWeight: 'bold', fontSize: 16 },
-  emptyText: { textAlign: 'center', marginVertical: 10, color: '#6b7280' },
-  rankingCard: { padding: 12, marginBottom: 8, borderRadius: 10, backgroundColor: '#dbeafe' },
+
+  statusBox: {
+    margin: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#e0f2fe',
+  },
+
+  statusText: { fontSize: 14, color: '#075985', marginBottom: 2 },
+
+  card: {
+    marginHorizontal: 12,
+    marginBottom: 10,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: '#f3f4f6',
+  },
+
+  codigo: { fontWeight: 'bold', fontSize: 16, marginBottom: 4 },
 });

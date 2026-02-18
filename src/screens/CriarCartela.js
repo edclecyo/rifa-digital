@@ -1,7 +1,7 @@
 import { View, Text, Pressable, ActivityIndicator, Alert } from 'react-native';
 import { useState } from 'react';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { app } from '../services/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../services/firebase';
 
 export default function CriarCartela() {
   const [loading, setLoading] = useState(false);
@@ -12,33 +12,24 @@ export default function CriarCartela() {
     try {
       setLoading(true);
 
-      const functions = getFunctions(app);
-      const criarCartelasFn = httpsCallable(
-        functions,
-        'criarCartelasAutomatico'
-      );
+      // usa o functions já inicializado
+      const criarCartelasFn = httpsCallable(functions, 'criarCartelasAutomatico');
 
       const res = await criarCartelasFn();
 
       Alert.alert(
-  '✅ Sucesso',
-  `Cartelas criadas com sucesso\nRodada: ${res.data.rodada}`
-);
+        '✅ Sucesso',
+        `Cartelas criadas com sucesso\nRodada: ${res.data.rodada}`
+      );
     } catch (error) {
       console.log('❌ Erro criar cartelas:', error);
 
       if (error?.code === 'functions/unauthenticated') {
-        Alert.alert(
-          'Login necessário',
-          'Você precisa estar logado como admin.'
-        );
+        Alert.alert('Login necessário', 'Você precisa estar logado como admin.');
         return;
       }
 
-      Alert.alert(
-        'Erro',
-        error?.message || 'Erro ao criar cartelas'
-      );
+      Alert.alert('Erro', error?.message || 'Erro ao criar cartelas');
     } finally {
       setLoading(false);
     }

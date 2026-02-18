@@ -9,65 +9,84 @@ import {
   Alert,
   Platform,
 } from "react-native";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "../services/firebase";
 
 export default function LGPDModal({ visible, onAceito }) {
   const [loading, setLoading] = useState(false);
   const [scrollFinal, setScrollFinal] = useState(false);
   const scrollRef = useRef(null);
 
-  const functionsSA = getFunctions(undefined, "southamerica-east1");
-
-  // 🔄 Reseta estado sempre que o modal abrir
+  
+  /* ===============================
+     🔄 RESET AO ABRIR MODAL
+  =============================== */
   useEffect(() => {
-    if (visible) {
-      setScrollFinal(false);
-      setLoading(false);
-      scrollRef.current?.scrollTo({ y: 0, animated: false });
-    }
+    if (!visible) return;
+
+    setScrollFinal(false);
+    setLoading(false);
+
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({
+        y: 0,
+        animated: false,
+      });
+    });
   }, [visible]);
 
+  /* ===============================
+     ✅ ACEITAR LGPD
+  =============================== */
   async function aceitarLgpd() {
-    if (!scrollFinal) {
-      Alert.alert(
-        "Atenção",
-        "Você precisa ler todo o termo antes de aceitar."
-      );
-      return;
-    }
-
-    try {
-      setLoading(true);
-
-      const registrarAceite = httpsCallable(
-        functionsSA,
-        "registrarAceiteLgpd"
-      );
-
-      const device =
-        typeof Platform !== "undefined" ? Platform.OS : "unknown";
-
-      await registrarAceite({
-        origem: "app",
-        device,
-      });
-
-      // ✅ dispara callback para o PAI fechar o modal
-      onAceito?.(true);
-    } catch (err) {
-      console.error("❌ Erro aceitar LGPD:", err);
-      Alert.alert(
-        "Erro",
-        err?.message ||
-          "Não foi possível registrar o aceite. Tente novamente."
-      );
-    } finally {
-      setLoading(false);
-    }
+  if (!scrollFinal || loading) {
+    Alert.alert(
+      "Atenção",
+      "Você precisa ler todo o termo antes de aceitar."
+    );
+    return;
   }
 
+  try {
+    setLoading(true);
+
+    const registrarAceite = httpsCallable(
+      functions, // ✅ CORRETO
+      "registrarAceiteLgpd"
+    );
+
+    const device = Platform?.OS || "unknown";
+
+    await registrarAceite({
+      origem: "app",
+      device,
+    });
+
+    // 🔔 avisa o pai (Routes/AuthContext)
+    if (typeof onAceito === "function") {
+      onAceito(true);
+    }
+  } catch (err) {
+    console.error("❌ Erro aceitar LGPD:", err);
+
+    Alert.alert(
+      "Erro",
+      err?.message ||
+        "Não foi possível registrar o aceite. Tente novamente."
+    );
+  } finally {
+    setLoading(false);
+  }
+}
+  /* ===============================
+     📜 CONTROLE DE SCROLL
+  =============================== */
   function handleScroll({ nativeEvent }) {
-    const { layoutMeasurement, contentOffset, contentSize } = nativeEvent;
+    const {
+      layoutMeasurement,
+      contentOffset,
+      contentSize,
+    } = nativeEvent;
 
     const chegouNoFim =
       layoutMeasurement.height + contentOffset.y >=
@@ -77,8 +96,9 @@ export default function LGPDModal({ visible, onAceito }) {
       setScrollFinal(true);
     }
   }
+if (!visible) return null;
 
-  return (
+return (
     <Modal visible={visible} animationType="slide" transparent>
       <View style={styles.overlay}>
         <View style={styles.container}>
@@ -152,7 +172,11 @@ Declaro que li integralmente este documento e concordo com seus termos.
           </ScrollView>
 
           <Pressable
-            style={[styles.button, (!scrollFinal || loading) && styles.buttonDisabled]}
+            style={[
+              styles.button,
+              (!scrollFinal || loading) &&
+                styles.buttonDisabled,
+            ]}
             onPress={aceitarLgpd}
             disabled={!scrollFinal || loading}
           >
@@ -172,6 +196,9 @@ Declaro que li integralmente este documento e concordo com seus termos.
   );
 }
 
+/* ===============================
+   🎨 STYLES
+================================ */
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,

@@ -1,33 +1,37 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db } from "../service/firebase";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../services/firebase";
+import { doc, setDoc, serverTimestamp, getDoc } from "firebase/firestore";
 
-export function useDeferredReferral(currentUserId) {
+export function useReferral(currentUserId) {
+  const processedRef = useRef(false);
+
   useEffect(() => {
-    const handleReferral = async () => {
-      let referralCode = null;
+    if (!currentUserId || processedRef.current) return;
 
-      // 1️⃣ Tenta pegar do link inicial
-      const url = await Linking.getInitialURL();
-      if (url) {
-        const parsed = Linking.parse(url);
-        referralCode = parsed.queryParams?.code;
+    let isMounted = true;
+
+    const processReferral = async (code) => {
+      if (!code || !isMounted) return;
+
+      const referralCode = String(code).trim();
+
+      if (referralCode === currentUserId) {
+        processedRef.current = true;
+        return;
       }
 
-      // 2️⃣ Tenta pegar do AsyncStorage (após instalar app)
-      if (!referralCode) {
-        referralCode = await AsyncStorage.getItem("referralCode");
+      const refDoc = doc(db, "Indicacoes", currentUserId);
+      const snap = await getDoc(refDoc);
+
+      if (snap.exists()) {
+        processedRef.current = true;
+        return;
       }
 
-      if (!referralCode) return;
-
-      console.log("Usuário veio com código:", referralCode);
-
-      // Salvar no Firestore
       await setDoc(
-        doc(db, "Indicacoes", currentUserId),
+        refDoc,
         {
           indicadorUid: referralCode,
           indicadoUid: currentUserId,
@@ -37,10 +41,32 @@ export function useDeferredReferral(currentUserId) {
         { merge: true }
       );
 
-      // Limpar AsyncStorage
       await AsyncStorage.removeItem("referralCode");
+      processedRef.current = true;
     };
 
-    handleReferral();
+    Linking.getInitialURL().then((url) => {
+      if (!url) return;
+      const parsed = Linking.parse(url);
+      processReferral(parsed.queryParams?.code);
+    });
+
+    const sub = Linking.addEventListener("url", ({ url }) => {
+      const parsed = Linking.parse(url);
+      const code = parsed.queryParams?.code;
+      if (code) {
+        AsyncStorage.setItem("referralCode", String(code));
+        processReferral(code);
+      }
+    });
+
+    AsyncStorage.getItem("referralCode").then((stored) => {
+      if (stored) processReferral(stored);
+    });
+
+    return () => {
+      isMounted = false;
+      sub.remove();
+    };
   }, [currentUserId]);
 }

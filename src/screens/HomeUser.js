@@ -1,176 +1,72 @@
-import { useContext, useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  Pressable,
-  ScrollView,
-  Share,
-  Alert,
-  ToastAndroid,
-  Platform,
-} from "react-native";
-import { AuthContext } from "../contexts/AuthContext";
-import { db, functions } from "../services/firebase";
-import { doc, onSnapshot } from "firebase/firestore";
-import { useNavigation, DrawerActions } from "@react-navigation/native";
-import { httpsCallable } from "firebase/functions";
-import ShareCard from "../components/ShareCard";
+import React, { useState } from "react";
+import { View, StyleSheet, Text, TouchableOpacity, Dimensions } from "react-native";
+import PagerView from "react-native-pager-view";
+
+import HomePrincipal from "./HomePrincipal";
+import TelaGanhadores from "./TelaGanhadores";
+import TelaSorteioCassino from "./TelaSorteioCassino";
+
+const { width } = Dimensions.get("window");
 
 export default function HomeUser() {
-  const { profile } = useContext(AuthContext);
-  const navigation = useNavigation();
+  const [page, setPage] = useState(0);
+  const pagerRef = React.useRef(null);
 
-  const [saldo, setSaldo] = useState(0);
-  const [usuarioPrivado, setUsuarioPrivado] = useState({
-    compartilhamento: { saldo: 0, codigo: "", uso: 0 },
-    premios: 0,
-    deposito: 0,
-  });
+  const tabs = [
+    { label: "🏠 Início", component: <HomePrincipal /> },
+    { label: "🏆 Ganhadores", component: <TelaGanhadores /> },
+    { label: "🎰 Sorteio", component: <TelaSorteioCassino /> },
+  ];
 
-  useEffect(() => {
-    if (!profile?.uid) return;
-
-    const unsub = onSnapshot(doc(db, "UsuariosPrivado", profile.uid), (snap) => {
-      if (!snap.exists()) return;
-
-      const data = snap.data();
-      const premios = data.premios || 0;
-      const compartilhamento = data.compartilhamento?.saldo || 0;
-      const codigo = data.compartilhamento?.codigo || "";
-      const uso = data.compartilhamento?.uso || 0;
-      const deposito = data.saldo || 0;
-
-      const total = premios + compartilhamento + deposito;
-
-      if (
-        usuarioPrivado.premios !== undefined &&
-        (premios > usuarioPrivado.premios || compartilhamento > usuarioPrivado.compartilhamento.saldo)
-      ) {
-        const ganho =
-          (premios - usuarioPrivado.premios || 0) +
-          (compartilhamento - usuarioPrivado.compartilhamento.saldo || 0);
-
-        if (Platform.OS === "android") {
-          ToastAndroid.show(`🎉 Você ganhou R$${ganho.toFixed(2)}!`, ToastAndroid.LONG);
-        } else {
-          Alert.alert("Parabéns!", `🎉 Você ganhou R$${ganho.toFixed(2)}!`);
-        }
-      }
-
-      setUsuarioPrivado({
-        compartilhamento: { saldo: compartilhamento, codigo, uso },
-        premios,
-        deposito,
-      });
-
-      setSaldo(total);
-    });
-
-    return unsub;
-  }, [profile, usuarioPrivado]);
-
-  // Compartilhar
-  async function handleCompartilhar() {
-    const codigo = usuarioPrivado.compartilhamento.codigo;
-    if (!codigo) return;
-
-    const link = `https://rifa-digital-f6425.web.app/ref?code=${codigo}`;
-    const message = `
-🎉 Ganhe cartelas grátis e aumente suas chances de ganhar!
-Use meu código ${codigo} no app ou site: ${link}
-
-💥 Cada amigo que usar seu código te dá mais chances de ganhar prêmios!
-🚀 Quanto mais você compartilhar, mais você ganha!
-`;
-
-    try {
-      await Share.share({ message });
-      if (Platform.OS === "android") {
-        ToastAndroid.show("Link compartilhado! 🎉", ToastAndroid.SHORT);
-      } else {
-        Alert.alert("Sucesso", "Link compartilhado! 🎉");
-      }
-    } catch {
-      Alert.alert("Erro", "Não foi possível compartilhar o código.");
-    }
-  }
-
-  // Sacar saldo
-  async function handleSacar() {
-    if (saldo < 100) {
-      Alert.alert("Saldo insuficiente", "Você precisa ter pelo menos R$100 para sacar.");
-      return;
-    }
-
-    try {
-      const sacarSaldo = httpsCallable(functions, "solicitarSaque");
-      await sacarSaldo({ valor: saldo });
-
-      Alert.alert(
-        "Saque solicitado",
-        `Você solicitou saque de R$${saldo.toFixed(2)}. Em breve será processado.`
-      );
-    } catch (err) {
-      console.error(err);
-      Alert.alert("Erro", "Não foi possível solicitar o saque.");
-    }
-  }
+  const handleTabPress = (index) => {
+    setPage(index);
+    pagerRef.current.setPage(index);
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: "#0f172a" }}>
-      <Pressable
-        onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
-        style={{ padding: 16, marginTop: 20, marginLeft: 10, width: 50, borderRadius: 8 }}
+      {/* PagerView para swipe */}
+      <PagerView
+        style={{ flex: 1 }}
+        initialPage={0}
+        ref={pagerRef}
+        onPageSelected={(e) => setPage(e.nativeEvent.position)}
       >
-        <Text style={{ color: "#fff", fontSize: 22 }}>☰</Text>
-      </Pressable>
-
-      <ScrollView style={{ padding: 20 }}>
-        <Text style={{ color: "#fff", fontSize: 20 }}>
-          Olá, {profile?.nome || "Usuário"} 👋
-        </Text>
-
-        <View
-          style={{
-            backgroundColor: "#020617",
-            padding: 16,
-            borderRadius: 14,
-            marginTop: 16,
-          }}
-        >
-          <Text style={{ color: "#38bdf8", fontSize: 18, fontWeight: "bold" }}>💳 Saldo disponível</Text>
-          <Text style={{ color: "#fff", fontSize: 28, fontWeight: "bold", marginTop: 6 }}>
-            R$ {saldo.toFixed(2)}
-          </Text>
-          <Text style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>
-            Inclui prêmios, ganhos por compartilhamento e depósitos
-          </Text>
-
-          <View style={{ flexDirection: "row", marginTop: 12, justifyContent: "space-between" }}>
-            <Pressable
-              onPress={() => navigation.navigate("Depositar")}
-              style={{ backgroundColor: "#16a34a", paddingVertical: 10, paddingHorizontal: 20, borderRadius: 12 }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "bold" }}>💵 Depositar</Text>
-            </Pressable>
-
-            {saldo >= 100 && (
-              <Pressable
-                onPress={handleSacar}
-                style={{ backgroundColor: "#f97316", paddingVertical: 10, paddingHorizontal: 20, borderRadius: 12 }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "bold" }}>🏧 Sacar</Text>
-              </Pressable>
-            )}
+        {tabs.map((tab, index) => (
+          <View key={index} style={{ flex: 1 }}>
+            {tab.component}
           </View>
-        </View>
+        ))}
+      </PagerView>
 
-        <ShareCard
-          codigo={usuarioPrivado.compartilhamento.codigo}
-          uso={usuarioPrivado.compartilhamento.uso || 0}
-          onCompartilhar={handleCompartilhar}
-        />
-      </ScrollView>
+      {/* Menu embaixo */}
+      <View style={styles.tabBar}>
+        {tabs.map((tab, index) => (
+          <TouchableOpacity
+            key={index}
+            style={styles.tabItem}
+            onPress={() => handleTabPress(index)}
+          >
+            <Text style={{ color: page === index ? "#f59e0b" : "#6b7280", fontWeight: "bold" }}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  tabBar: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    backgroundColor: "#0f172a",
+    height: 60,
+    alignItems: "center",
+  },
+  tabItem: {
+    flex: 1,
+    alignItems: "center",
+  },
+});

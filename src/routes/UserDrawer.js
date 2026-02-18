@@ -2,23 +2,23 @@ import {
   createDrawerNavigator,
   DrawerContentScrollView,
   DrawerItem,
-} from '@react-navigation/drawer';
-import { View, Text, Image } from 'react-native';
-import { useContext } from 'react';
+} from "@react-navigation/drawer";
+import { View, Text, Image } from "react-native";
+import { useContext } from "react";
 
-import HomeUser from '../screens/HomeUser';
-import EscolherCartelas from '../screens/EscolherCartelas';
-import MinhasCartelas from '../screens/MinhasCartelas';
-import PerfilUser from '../screens/PerfilUser';
-import ConfigUser from '../screens/ConfigUser';
-import SobreUser from '../screens/SobreUser';
-import RankingPublico from '../screens/RankingPublico';
-import HistoricoPagamentos from '../screens/HistoricoPagamentos';
-import InboxNotificacoes from '../screens/InboxNotificacoes';
-import MeusGanhos from '../screens/MeusGanhos'; // 🔹 ADICIONADO
-import HistoricoCartelas from '../screens/HistoricoCartelas'; // 🔹 ADICIONADO
-import { AuthContext } from '../contexts/AuthContext';
-
+import HomeUser from "../screens/HomeUser";
+import MinhasCartelas from "../screens/MinhasCartelas";
+import PerfilUser from "../screens/PerfilUser";
+import ConfigUser from "../screens/ConfigUser";
+import SobreUser from "../screens/SobreUser";
+import RankingPublico from "../screens/RankingPublico";
+import HistoricoPagamentos from "../screens/HistoricoPagamentos";
+import InboxNotificacoes from "../screens/InboxNotificacoes";
+import MeusGanhos from "../screens/MeusGanhos";
+import HistoricoCartelas from "../screens/HistoricoCartelas";
+import { AuthContext } from "../contexts/AuthContext";
+import Carteira from "../screens/Carteira";
+import Sacar from "../screens/Sacar";
 const Drawer = createDrawerNavigator();
 
 /* =======================
@@ -32,7 +32,7 @@ function CustomDrawer(props) {
       <View
         style={{
           padding: 20,
-          backgroundColor: '#0f172a',
+          backgroundColor: "#0f172a",
           marginBottom: 10,
         }}
       >
@@ -40,7 +40,7 @@ function CustomDrawer(props) {
           source={{
             uri:
               profile?.foto ||
-              `https://ui-avatars.com/api/?name=${profile?.nome || 'User'}`,
+              `https://ui-avatars.com/api/?name=${profile?.nome || "User"}`,
           }}
           style={{
             width: 70,
@@ -50,56 +50,55 @@ function CustomDrawer(props) {
           }}
         />
 
-        <Text style={{ color: '#fff', fontSize: 16 }}>
-          {profile?.nome || 'Usuário'}
+        <Text style={{ color: "#fff", fontSize: 16 }}>
+          {profile?.nome || "Usuário"}
         </Text>
 
-        <Text style={{ color: '#94a3b8', fontSize: 13 }}>
+        <Text style={{ color: "#94a3b8", fontSize: 13 }}>
           {user?.email}
         </Text>
       </View>
 
-      <DrawerItem
-        label="Início"
-        onPress={() => props.navigation.navigate('HomeUser')}
-      />
-      <DrawerItem
-        label="Perfil"
-        onPress={() => props.navigation.navigate('PerfilUser')}
-      />
+      {/* 🔑 SEMPRE jumpTo dentro do Drawer */}
+      <DrawerItem label="🏠 Início" onPress={() => props.navigation.jumpTo("Home")} />
+      <DrawerItem label="👤 Perfil" onPress={() => props.navigation.jumpTo("Perfil")} />
       <DrawerItem
         label="📥 Notificações"
-        onPress={() => props.navigation.navigate('InboxNotificacoes')}
+        onPress={() => props.navigation.jumpTo("InboxNotificacoes")}
+      />
+      <DrawerItem
+        label="💳 Carteira"
+        onPress={() => props.navigation.jumpTo("Carteira")}
       />
 	  <DrawerItem
-        label=" 🎟️ Historico de Cartelas"
-        onPress={() => props.navigation.navigate('HistoricoCartelas')}
+        label="🎟️ Histórico de Cartelas"
+        onPress={() => props.navigation.jumpTo("HistoricoCartelas")}
       />
       <DrawerItem
         label="💳 Histórico de Pagamentos"
-        onPress={() => props.navigation.navigate('HistoricoPagamentos')}
+        onPress={() => props.navigation.jumpTo("HistoricoPagamentos")}
       />
       <DrawerItem
         label="💰 Meus Ganhos"
-        onPress={() => props.navigation.navigate('MeusGanhos')} // 🔹 ADICIONADO
+        onPress={() => props.navigation.jumpTo("MeusGanhos")}
       />
       <DrawerItem
         label="🏆 Ranking"
-        onPress={() => props.navigation.navigate('RankingPublico')}
+        onPress={() => props.navigation.jumpTo("RankingPublico")}
       />
       <DrawerItem
-        label="Configurações"
-        onPress={() => props.navigation.navigate('ConfigUser')}
+        label="⚙️ Configurações"
+        onPress={() => props.navigation.jumpTo("Config")}
       />
       <DrawerItem
-        label="Sobre"
-        onPress={() => props.navigation.navigate('SobreUser')}
+        label="ℹ️ Sobre"
+        onPress={() => props.navigation.jumpTo("Sobre")}
       />
 
       <DrawerItem
-        label="Sair"
+        label="🚪 Sair"
         onPress={logout}
-        labelStyle={{ color: '#dc2626' }}
+        labelStyle={{ color: "#dc2626" }}
       />
     </DrawerContentScrollView>
   );
@@ -114,29 +113,27 @@ export default function UserDrawer() {
       screenOptions={{
         headerShown: false,
         drawerStyle: {
-          backgroundColor: '#fff',
+          backgroundColor: "#fff",
           width: 280,
         },
       }}
       drawerContent={(props) => <CustomDrawer {...props} />}
     >
-      <Drawer.Screen name="HomeUser" component={HomeUser} />
-      <Drawer.Screen name="EscolherCartelas" component={EscolherCartelas} />
+      <Drawer.Screen name="Home" component={HomeUser} />
       <Drawer.Screen name="MinhasCartelas" component={MinhasCartelas} />
-      <Drawer.Screen name="PerfilUser" component={PerfilUser} />
-      <Drawer.Screen name="ConfigUser" component={ConfigUser} />
-      <Drawer.Screen name="SobreUser" component={SobreUser} />
+      <Drawer.Screen name="Perfil" component={PerfilUser} />
+      <Drawer.Screen name="Config" component={ConfigUser} />
+      <Drawer.Screen name="Sobre" component={SobreUser} />
       <Drawer.Screen name="InboxNotificacoes" component={InboxNotificacoes} />
       <Drawer.Screen name="RankingPublico" component={RankingPublico} />
-	  <Drawer.Screen name="HistoricoCartelas" component={HistoricoCartelas} />
-      <Drawer.Screen
+      <Drawer.Screen name="HistoricoCartelas" component={HistoricoCartelas} />
+      <Drawer.Screen name="Carteira" component={Carteira} />
+	  <Drawer.Screen name="Sacar" component={Sacar} />
+	  <Drawer.Screen
         name="HistoricoPagamentos"
         component={HistoricoPagamentos}
       />
-      <Drawer.Screen
-        name="MeusGanhos" // 🔹 ADICIONADO
-        component={MeusGanhos}
-      />
+      <Drawer.Screen name="MeusGanhos" component={MeusGanhos} />
     </Drawer.Navigator>
   );
 }

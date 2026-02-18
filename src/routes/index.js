@@ -1,52 +1,63 @@
-import { useContext } from "react";
+import { useContext, useMemo } from "react";
 import { NavigationContainer } from "@react-navigation/native";
-import * as Linking from "expo-linking";
+import { View, ActivityIndicator } from "react-native";
 
 import { AuthContext } from "../contexts/AuthContext";
-import AuthRoutes from "./AuthRoutes";
-import AppRoutes from "./AppRoutes";
-import AdminRoutes from "./AdminRoutes";
+import RootNavigator from "./RootNavigator";
 import LGPDModal from "../components/LGPDModal";
-
-/* 🔗 CONFIGURAÇÃO DE DEEP LINK */
-const linking = {
-  prefixes: [
-    "rifadigital://",
-    "https://rifa-digital-f6425.web.app",
-  ],
-  config: {
-    screens: {
-      Registrar: {
-        path: "register",
-      },
-    },
-  },
-};
 
 export default function Routes() {
   const { user, loading, isAdmin, lgpdPendente, refreshLgpd } =
     useContext(AuthContext);
 
-  if (loading) return null;
+  const linking = useMemo(
+    () => ({
+      prefixes: [
+        "rifadigital://",
+        "https://rifa-digital-f6425.web.app",
+      ],
+      config: {
+        screens: {
+          Registrar: "register",
+        },
+      },
+    }),
+    []
+  );
 
-  return (
-    <>
-       {/* 🔗 LINKING AQUI */}
-      <NavigationContainer linking={linking}>
-        {!user && <AuthRoutes />}
-        {user && !isAdmin && <AppRoutes />}
-        {user && isAdmin && <AdminRoutes />}
-      </NavigationContainer>
+  /* ===============================
+     ⏳ LOADING GLOBAL
+  =============================== */
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
 
-      {/* 🔒 LGPD SEMPRE POR CIMA */}
+  /* ===============================
+     🔒 BLOQUEIO LGPD (ANTES DO NAV)
+  =============================== */
+  if (user && lgpdPendente) {
+    return (
       <LGPDModal
-        visible={lgpdPendente === true}
+        visible
         onAceito={async () => {
           if (user?.uid) {
             await refreshLgpd(user.uid);
           }
         }}
       />
-    </>
+    );
+  }
+
+  /* ===============================
+     🚀 NAVEGAÇÃO NORMAL
+  =============================== */
+  return (
+    <NavigationContainer linking={linking}>
+      <RootNavigator user={user} isAdmin={isAdmin} />
+    </NavigationContainer>
   );
 }
