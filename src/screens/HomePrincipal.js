@@ -210,15 +210,135 @@ useEffect(() => {
 
   /* ================= UI ================= */
   return (
-    <View style={{ flex: 1, backgroundColor: "#0f172a" }}>
-      {/* MENU */}
-      <Pressable onPress={() => navigation.dispatch(DrawerActions.openDrawer())} style={{ padding: 16, marginTop: 20 }}>
-        <Text style={{ color: "#fff", fontSize: 22 }}>☰</Text>
-      </Pressable>
+   <View style={{ flex: 1, backgroundColor: "#0f172a", padding: 20}}>
+  {/* ================= TOP BAR ================= */}
+  <View
+    style={{
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: 10,
+    }}
+  >
+    <Pressable
+      onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
+      style={{ padding: 8 }}
+    >
+      <Text style={{ color: "#fff", fontSize: 22 }}>☰</Text>
+    </Pressable>
 
-      <ScrollView contentContainerStyle={{ padding: 20 }}>
-        {/* SAUDAÇÃO */}
-        <Text style={{ color: "#fff", fontSize: 20 }}>Olá, {profile?.nome || "Usuário"} 👋</Text>
+    <Text
+      style={{
+        color: "#fff",
+        fontSize: 18,
+        fontWeight: "bold",
+        marginLeft: 10,
+        flex: 1,
+      }}
+      numberOfLines={1}
+    >
+      Olá, {profile?.nome || "Usuário"} 👋
+    </Text>
+  </View>
+
+  <ScrollView contentContainerStyle={{ paddingBottom: 35 }}>
+    {/* ================= CARD SALDO ================= */}
+    <View
+      style={{
+        backgroundColor: "#1e293b",
+        padding: 18,
+        borderRadius: 18,
+        marginBottom: 15,
+        shadowColor: "#000",
+        shadowOpacity: 0.4,
+        shadowRadius: 8,
+        elevation: 6,
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        {/* SALDO */}
+        <View>
+          <Text
+            style={{
+              color: "#bfcad9",
+              fontSize: 16,
+              marginBottom: 6,
+            }}
+          >
+            💳 Saldo disponível
+          </Text>
+
+          <View
+            style={{
+              backgroundColor: "#000",
+              paddingVertical: 8,
+              paddingHorizontal: 16,
+              borderRadius: 12,
+              minWidth: 120,
+              alignItems: "center",
+            }}
+          >
+            <Text
+              style={{
+                color: "#f0f5f7",
+                fontSize: 20,
+                fontWeight: "bold",
+              }}
+            >
+              R$ {(Number(saldo) || 0).toFixed(2)}
+            </Text>
+          </View>
+        </View>
+
+        {/* BOTÕES */}
+        <View style={{ alignItems: "flex-end" }}>
+          <Pressable
+            onPress={() => navigation.navigate("Depositar")}
+            style={{
+              borderRadius: 12,
+              overflow: "hidden",
+              marginBottom: 8,
+            }}
+          >
+            <LinearGradient
+              colors={["#3b82f6", "#06b6d4"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={{
+                paddingVertical: 9,
+                paddingHorizontal: 18,
+                borderRadius: 12,
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                💵 Depositar
+              </Text>
+            </LinearGradient>
+          </Pressable>
+
+          {(Number(saldo) || 0) >= 100 && (
+            <Pressable
+              onPress={handleSacar}
+              style={{
+                backgroundColor: "#f97316",
+                paddingVertical: 9,
+                paddingHorizontal: 18,
+                borderRadius: 12,
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                🏧 Sacar
+              </Text>
+            </Pressable>
+          )}
+        </View>
+      </View>
+    </View>
 
           {/* GANHADORES */}
 <View style={{ marginTop: 20 }}>
@@ -336,29 +456,6 @@ useEffect(() => {
     />
   )}
 </View>
-
-        {/* SALDO */}
-        <View style={{ backgroundColor: "#020617", padding: 16, borderRadius: 14, marginTop: 16 }}>
-          <Text style={{ color: "#38bdf8", fontSize: 18, fontWeight: "bold" }}>💳 Saldo disponível</Text>
-          <Text style={{ color: "#fff", fontSize: 28, fontWeight: "bold", marginTop: 6 }}>R$ {saldo.toFixed(2)}</Text>
-          <View style={{ flexDirection: "row", marginTop: 12 }}>
-            <Pressable
-              onPress={() => navigation.navigate("Depositar")}
-              style={{ backgroundColor: "#16a34a", padding: 12, borderRadius: 12, marginRight: 8 }}
-            >
-              <Text style={{ color: "#fff", fontWeight: "bold" }}>💵 Depositar</Text>
-            </Pressable>
-            {saldo >= 100 && (
-              <Pressable
-                onPress={handleSacar}
-                style={{ backgroundColor: "#f97316", padding: 12, borderRadius: 12 }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "bold" }}>🏧 Sacar</Text>
-              </Pressable>
-            )}
-          </View>
-        </View>
-
         {/* ROLETA DIÁRIA */}
         <RoletaDiaria
           visible={showRoleta}
@@ -427,7 +524,7 @@ useEffect(() => {
       marginTop: 16,
       backgroundColor: "#3b82f6",
       paddingVertical: 16,
-      paddingHorizontal: 32,
+      paddingHorizontal: 60,
       borderRadius: 14,
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 4 },
@@ -436,20 +533,11 @@ useEffect(() => {
       elevation: 4,
     }}
   >
-    <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 18, textAlign: "center" }}>
+    <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 20, textAlign: "center" }}>
       🛒 Comprar Cartela
     </Text>
   </Pressable>
 </View>
-
-
-        {/* SORTEIO */}
-        <Pressable
-          onPress={() => navigation.navigate("Sorteio")}
-          style={{ backgroundColor: "#f59e0b", padding: 14, borderRadius: 12, marginTop: 16 }}
-        >
-          <Text style={{ color: "#000", fontWeight: "bold", textAlign: "center" }}>🎰 Ver Sorteio Ao Vivo</Text>
-        </Pressable>
 
         {/* COMPARTILHAR */}
         <View style={{ marginTop: 20, padding: 16, borderRadius: 14, backgroundColor: "#1f2937", borderWidth: 2, borderColor: "#f59e0b" }}>
