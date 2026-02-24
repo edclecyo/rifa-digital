@@ -20,15 +20,22 @@ import { doc, onSnapshot, collection, query, where, limit, getDocs } from "fireb
 import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { httpsCallable } from "firebase/functions";
 import { LinearGradient } from "expo-linear-gradient";
-
+import { orderBy } from "firebase/firestore";
 import RoletaDiaria from "../components/RoletaDiaria";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export default function HomePrincipal() {
+
   const { profile } = useContext(AuthContext);
   const navigation = useNavigation();
   const isAdmin = profile?.isAdmin === true;
-
+const ETAPAS_PREMIOS = [
+  { cartelas: 200, premio: 50 },
+  { cartelas: 300, premio: 100 },
+  { cartelas: 500, premio: 250 },
+  { cartelas: 1000, premio: 500 },
+  { cartelas: 12500, premio: 5000 }
+];	
   const [saldo, setSaldo] = useState(0);
   const [ganhadores, setGanhadores] = useState([]);
   const [cartelasDisponiveis, setCartelasDisponiveis] = useState(0);
@@ -45,18 +52,72 @@ export default function HomePrincipal() {
   const prevRef = useRef({ premios: 0, compartilhamento: 0 });
   const animatedWidth = useRef(new Animated.Value(0)).current;
   const animatedPercent = useRef(new Animated.Value(0)).current;
+  
+ 
+const ultimaVendaRef = useRef(Date.now());
+const ultimoTotalRef = useRef(0);
 
-  const META_MINIMA_SORTEIO = 10000; // Valor referência para etapas do prêmio
-  const PREMIO_ATUAL = 5000; // Valor final do prêmio
+const [mediaVendasPorSegundo, setMediaVendasPorSegundo] = useState(0);
 
-  const ETAPAS_PREMIOS = [
-    { cartelas: 200, valor: 50 },
-    { cartelas: 300, valor: 100 },
-    { cartelas: 500, valor: 250 },
-    { cartelas: 1000, valor: 500 },
-    { cartelas: META_MINIMA_SORTEIO, valor: PREMIO_ATUAL },
-  ];
+const [faltamCartelas, setFaltamCartelas] = useState(0);
+const [sorteioLiberado, setSorteioLiberado] = useState(false);
 
+ 
+const [cartelasVendidas, setCartelasVendidas] = useState(0);
+const [etapaAtualIndex, setEtapaAtualIndex] = useState(0);
+const [tempoEstimado, setTempoEstimado] = useState(0);
+
+const inicioRodadaRef = useRef(Date.now());
+const ultimoTempoCalculadoRef = useRef(0);
+const intervaloTempoRef = useRef(null);
+const etapaAtual = ETAPAS_PREMIOS?.[etapaAtualIndex] ?? {
+  cartelas: 0,
+  premio: 0
+};
+useEffect(() => {
+  if (!ETAPAS_PREMIOS || ETAPAS_PREMIOS.length === 0) return;
+
+  const etapaAtual = ETAPAS_PREMIOS[etapaAtualIndex];
+  if (!etapaAtual) return;
+
+  if (cartelasVendidas >= etapaAtual.cartelas) {
+    liberarPremio(etapaAtual);
+  }
+
+}, 
+[cartelasVendidas, etapaAtualIndex]);
+useEffect(() => {
+  if (!rodadaAtual) return;
+
+  async function buscarInicioRodada() {
+    try {
+      const q = query(
+        collection(db, "Cartelas"),
+        where("rodada", "==", rodadaAtual),
+        where("status", "==", "vendida"),
+        orderBy("createdAt", "asc"),
+        limit(1)
+      );
+
+      const snap = await getDocs(q);
+
+      if (!snap.empty) {
+        const primeira = snap.docs[0].data();
+
+        if (primeira.createdAt?.toDate) {
+          inicioRodadaRef.current =
+            primeira.createdAt.toDate().getTime();
+        }
+      }
+
+    } catch (e) {
+      console.log("Erro ao buscar início da rodada:", e);
+    }
+  }
+
+  buscarInicioRodada();
+
+}, [rodadaAtual]);
   /* =================== ROLETA DIÁRIA =================== */
   useEffect(() => {
     async function verificarRoleta() {
@@ -108,7 +169,28 @@ export default function HomePrincipal() {
       setSaldo(Number.isFinite(total) ? total : 0);
     });
   }, [profile?.uid, isAdmin]);
+function liberarPremio(etapa) {
 
+  console.log("Premio liberado:", etapa.premio);
+
+  // 👉 Aqui você pode chamar Firebase Function
+  // 👉 Ou registrar no banco
+
+  const proximaEtapa = etapaAtualIndex + 1;
+
+  if (proximaEtapa < ETAPAS_PREMIOS.length) {
+
+    // 🔥 Avança etapa
+    setEtapaAtualIndex(proximaEtapa);
+
+  } else {
+
+    // 🚨 Se for a última etapa → RESET TOTAL
+    resetarRodada();
+
+  }
+
+}
   /* ================= CARTELAS EM TEMPO REAL (SÓ VENDIDAS) ================= */
 const [percentFormatado, setPercentFormatado] = useState("0.00");
 
@@ -121,28 +203,107 @@ useEffect(() => {
     where("status", "==", "vendida")
   );
 
-  const cartelasMax = 12500; // limite total
+  const cartelasMax = 12500;
 
   return onSnapshot(q, (snap) => {
     const quantidadeVendida = snap.size;
+    setCartelasVendidas(quantidadeVendida);
 
-    // cálculo exato da porcentagem
     const percent = (quantidadeVendida / cartelasMax) * 100;
-    const arredondado = percent.toFixed(2); // 2 casas decimais, mostra 0.01%, 0.02% ...
-
+    const arredondado = percent.toFixed(2);
     setPercentFormatado(arredondado);
 
-    // animação da barra
     Animated.timing(animatedWidth, {
       toValue: quantidadeVendida / cartelasMax,
       duration: 600,
       useNativeDriver: false,
     }).start();
-
-    setShowMensagem20(cartelasMax - quantidadeVendida <= 20);
   });
 }, [rodadaAtual, isAdmin]);
+useEffect(() => {
+  // 🔥 NÃO CALCULA SE TIVER 0 OU 1 VENDA
+  if (cartelasVendidas <= 1) return;
 
+  const agora = Date.now();
+
+  const tempoDecorridoSegundos =
+    (agora - inicioRodadaRef.current) / 1000;
+
+  if (tempoDecorridoSegundos <= 0) return;
+
+  const mediaSegundosPorCartela =
+    tempoDecorridoSegundos / cartelasVendidas;
+
+  const etapaAtual = ETAPAS_PREMIOS[etapaAtualIndex];
+  if (!etapaAtual) return;
+
+  const cartelasRestantes =
+    etapaAtual.cartelas - cartelasVendidas;
+
+  if (cartelasRestantes <= 0) {
+    setTempoEstimado(0);
+    return;
+  }
+
+  const novoTempoEstimado =
+    Math.floor(mediaSegundosPorCartela * cartelasRestantes);
+
+  if (
+    ultimoTempoCalculadoRef.current === 0 ||
+    novoTempoEstimado < ultimoTempoCalculadoRef.current
+  ) {
+    ultimoTempoCalculadoRef.current = novoTempoEstimado;
+    setTempoEstimado(novoTempoEstimado);
+  }
+
+}, [cartelasVendidas, etapaAtualIndex]);
+
+useEffect(() => {
+  if (!sorteioLiberado) return;
+
+  const etapa = ETAPAS_PREMIOS[etapaAtualIndex];
+
+  async function executarSorteioReal() {
+    try {
+      const call = httpsCallable(functions, "executarSorteio");
+
+      await call({
+       valor: etapa.premio,
+        meta: etapa.cartelas,
+        rodada: rodadaAtual,
+      });
+
+      console.log("SORTEIO REAL EXECUTADO:", etapa.premio);
+
+      setSorteioLiberado(false);
+
+    } catch (e) {
+      console.log("Erro ao executar sorteio:", e);
+    }
+  }
+
+  executarSorteioReal();
+
+}, [sorteioLiberado]);
+useEffect(() => {
+  if (tempoEstimado <= 0) return;
+
+  intervaloTempoRef.current &&
+    clearInterval(intervaloTempoRef.current);
+
+  intervaloTempoRef.current = setInterval(() => {
+    setTempoEstimado(prev => {
+      if (prev <= 1) {
+        clearInterval(intervaloTempoRef.current);
+        return 0;
+      }
+      return prev - 1;
+    });
+  }, 1000);
+
+  return () => clearInterval(intervaloTempoRef.current);
+
+}, [tempoEstimado]);
   /* ================= GANHADORES ================= */
   useEffect(() => {
     if (isAdmin) return;
@@ -166,7 +327,28 @@ useEffect(() => {
 
     return unsubscribe;
   }, [rodadaAtual, isAdmin]);
+function formatarTempo(segundos) {
+  const meses = Math.floor(segundos / (30 * 24 * 3600));
+  const dias = Math.floor((segundos % (30 * 24 * 3600)) / 86400);
+  const horas = Math.floor((segundos % 86400) / 3600);
+  const minutos = Math.floor((segundos % 3600) / 60);
+  const seg = segundos % 60;
 
+  return `${meses}m ${dias}d ${horas}h ${minutos}min ${seg}s`;
+}
+function resetarRodada() {
+
+  console.log("Resetando rodada...");
+
+  setCartelasVendidas(0);
+  setEtapaAtualIndex(0);
+  setTempoEstimado(0);
+
+  ultimoTempoCalculadoRef.current = 0;
+
+  inicioRodadaRef.current = Date.now();
+
+}
   /* ================= COMPARTILHAR ================= */
   async function handleCompartilhar() {
     const codigo = usuarioPrivado.compartilhamento.codigo;
@@ -339,7 +521,31 @@ useEffect(() => {
         </View>
       </View>
     </View>
+<View
+  style={{
+    backgroundColor: "#111827",
+    padding: 16,
+    borderRadius: 16,
+    alignItems: "center",
+    marginBottom: 15,
+    borderWidth: 2,
+    borderColor: "#f59e0b"
+  }}
+>
+  <Text style={{ color: "#f59e0b", fontSize: 16, fontWeight: "bold" }}>
+    ⏳ Estimativa Próximo Sorteio
+  </Text>
 
+  <Text style={{ color: "#fff", fontSize: 22, fontWeight: "bold", marginTop: 6 }}>
+    {tempoEstimado > 0 
+      ? formatarTempo(tempoEstimado) 
+      : "🎉 Sorteio Liberado!"}
+  </Text>
+
+  <Text style={{ color: "#facc15", marginTop: 6 }}>
+    Valendo R$ {etapaAtual.premio}
+  </Text>
+</View>
           {/* GANHADORES */}
 <View style={{ marginTop: 20 }}>
   <Text
@@ -469,7 +675,7 @@ useEffect(() => {
         {/* PRÊMIO */}
         <View style={{ backgroundColor: "#1f2937", padding: 16, borderRadius: 14, marginTop: 16, borderWidth: 2, borderColor: "#f59e0b" }}>
           <Text style={{ color: "#f59e0b", fontSize: 28, fontWeight: "bold", textAlign: "center" }}>
-            🎉 PRÊMIO R$ {PREMIO_ATUAL} 🎉
+            🎉 PRÊMIO R$ {etapaAtual.premio} 🎉
           </Text>
 
           {/* ETAPAS DO PRÊMIO */}
